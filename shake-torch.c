@@ -18,6 +18,7 @@
  * Settings: ~/.config/shake-torch.conf, reread on SIGHUP (see README.md).
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -174,7 +175,8 @@ static int toggle_torch(void)
     return -1;
 }
 
-/* Buzz once for on, twice for off, so it can be told without looking.
+/* Buzz twice for on, once for off, so it can be told without looking. Always, also
+ * in the silent profile: the user asked for that.
  *
  * FuriOS and other hybris phones: the Android vibrator as an LED class device
  * (duration in ms, then activate), writable by the phone's user. This plays whatever
@@ -182,11 +184,24 @@ static int toggle_torch(void)
  * button events are a 7 ms tick. Elsewhere (Sailfish): ngfd. */
 #define VIBRATOR "/sys/class/leds/vibrator"
 
+/* A plain write: g_file_set_contents() writes a temporary file and renames it, which a
+ * device file in /sys can't take. */
+static void write_sysfs(const char *path, const char *value)
+{
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0)
+        return;
+    if (write(fd, value, strlen(value)) < 0)
+        g_debug("%s: %s", path, g_strerror(errno));
+    close(fd);
+}
+
 static gboolean buzz_sysfs(gpointer ms)
 {
-    g_autofree char *d = g_strdup_printf("%d", GPOINTER_TO_INT(ms));
-    g_file_set_contents(VIBRATOR "/duration", d, -1, NULL);
-    g_file_set_contents(VIBRATOR "/activate", "1", -1, NULL);
+    char d[16];
+    g_snprintf(d, sizeof d, "%d", GPOINTER_TO_INT(ms));
+    write_sysfs(VIBRATOR "/duration", d);
+    write_sysfs(VIBRATOR "/activate", "1");
     return G_SOURCE_REMOVE;
 }
 
@@ -196,10 +211,10 @@ static void vibrate(gboolean on)
         return;
     if (access(VIBRATOR "/activate", W_OK) == 0) {
         if (on) {
-            buzz_sysfs(GINT_TO_POINTER(80));
+            buzz_sysfs(GINT_TO_POINTER(60));
+            g_timeout_add(180, buzz_sysfs, GINT_TO_POINTER(60));
         } else {
-            buzz_sysfs(GINT_TO_POINTER(40));
-            g_timeout_add(160, buzz_sysfs, GINT_TO_POINTER(40));
+            buzz_sysfs(GINT_TO_POINTER(80));
         }
         return;
     }
@@ -548,7 +563,7 @@ int main(int argc, char **argv)
             return 1;
         g_print("Torch %s\n", on ? "on" : "off");
         vibrate(on);
-        if (!on) {  /* let the second buzz happen */
+        if (on) {  /* let the second buzz happen */
             g_autoptr(GMainLoop) l = g_main_loop_new(NULL, FALSE);
             g_timeout_add(250, quit_loop, l);
             g_main_loop_run(l);

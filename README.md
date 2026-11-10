@@ -1,6 +1,6 @@
 # Shake for the torch
 
-Shake the phone to switch the torch on or off, like Motorola's gesture. One buzz when it goes on, two when it goes off. Written for FuriOS (Furi FLX1s) and Sailfish OS from one C source.
+Shake the phone to switch the torch on or off, like Motorola's gesture. Two buzzes when it goes on, one when it goes off, also when the phone is set to silent. Written for FuriOS (Furi FLX1s) and Sailfish OS from one C source.
 
 ## How it works
 
