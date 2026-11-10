@@ -5,11 +5,11 @@ Shake the phone to switch the torch on or off, like Motorola's gesture. Two buzz
 ## How it works
 
 - **Motion:** both systems run sensorfwd. `shake-torch` asks it for an accelerometer session over D-Bus (`com.nokia.SensorService`, system bus) and reads the readings from `/run/sensord.sock`: 50 a second, in milli-g. The protocol is in the comment at the top of `shake-torch.c`. QtSensors isn't used: on FuriOS it has no sensorfw plugin.
-- **Shake:** how far the total acceleration is from 1 g. That is zero at rest however the phone is held, and large while it's shaken. When it stays over the threshold (1 g) for at least half the readings in half a second, the torch switches; then 1.5 s of quiet. A step or a bump is a short spike and doesn't last.
+- **Shake:** a swing one way and back, like Motorola's chop. Gravity is the average of the last second; what's left is the movement. Within the last 0.6 s, the strongest movement must reach the threshold (1.4 g) and the movement back along the same line 60% of it. A step or putting the phone down is mostly one way. After switching it waits until the phone is calm (under 0.8 g for a quarter second) and at least 0.8 s, so one long shake doesn't switch it on and off.
 - **Torch:** FuriOS `io.furios.Flashlightd` (`SetBrightness`), Sailfish `org.sailfish.flashlight.provider` (`toggleFlashlight`). Whichever answers.
 - **Buzz:** on FuriOS through the vibrator device `/sys/class/leds/vibrator` (writable by the phone's user), so it works in feedbackd's "silent" profile too. On Sailfish through ngfd (untested).
 
-Measured on the FLX1s (2026-11-10), strongest point of each movement: walking and handling 0.5 to 1.25 g, firm shakes 1.8 to 9 g.
+Tuned on a 100 s recording of the user's hand on the FLX1s (2026-11-10): walking peaked at 1.25 g, gentle shakes at 1.5 to 2 g, normal ones (a chop) at 4 to 10 g, in bursts of about half a second. Two earlier methods failed on it: counting three alternating swings merged fast swings into one, and "how far the total is from 1 g" barely moves when the phone is shaken sideways (a 2 g sideways shake reads 1.2 g). Replayed through the current method: 25 of 36 separate bursts switched (the rest followed another within a second), nothing while walking.
 
 ## Build and install
 

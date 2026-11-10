@@ -47,10 +47,8 @@
 typedef struct {
     /* settings */
     gboolean enabled;
-    double threshold_g;   /* how far from 1 g a reading must be to count as shaking */
-    int shake_ms;         /* how long the shaking must last ... */
-    double share;         /* ... with this share of the readings over the threshold */
-    int cooldown_ms;      /* after switching, ignore movement this long */
+    double threshold_g;   /* how hard the strongest swing must be, gravity taken out */
+    int cooldown_ms;      /* at least this long between two switches */
     gboolean screen_off;  /* keep the sensor running with the screen off */
     gboolean vibrate;
     int buzz_on_ms, buzz_gap_ms, buzz_off_ms;  /* on: two buzzes with a pause; off: one */
@@ -70,11 +68,14 @@ typedef struct {
     GByteArray *buf;
     gboolean got_tag;
 
-    /* the detector: recent readings, oldest first */
-    guint64 when[WINDOW_MAX];
-    gboolean over[WINDOW_MAX];
-    int n, first;
-    guint64 quiet_until;
+    /* the detector: two rings of recent readings, oldest first */
+    struct { guint64 t; double x, y, z; } grav[WINDOW_MAX];   /* last second: gravity */
+    int gn, gfirst;
+    double gsx, gsy, gsz;                                     /* their sums */
+    struct { guint64 t; double x, y, z, m; } mov[WINDOW_MAX]; /* last 0.6 s: movement */
+    int mn, mfirst;
+    gboolean armed;
+    guint64 calm_since, quiet_until;
     double bump;          /* strongest movement in the current bump (log-movement) */
     guint64 last_print;
     double print_max;
@@ -92,15 +93,13 @@ static char *config_path(void)
 static void load_settings(void)
 {
     app.enabled = TRUE;
-    app.threshold_g = 1.0;
-    app.shake_ms = 500;
-    app.share = 0.5;
-    app.cooldown_ms = 1500;
+    app.threshold_g = 1.4;
+    app.cooldown_ms = 800;
     app.screen_off = TRUE;
     app.vibrate = TRUE;
-    app.buzz_on_ms = 150;
-    app.buzz_gap_ms = 250;
-    app.buzz_off_ms = 300;
+    app.buzz_on_ms = 250;
+    app.buzz_gap_ms = 50;
+    app.buzz_off_ms = 275;
     app.log_movement = FALSE;
 
     g_autofree char *path = config_path();
@@ -114,8 +113,6 @@ static void load_settings(void)
         } while (0)
         GET(boolean, enabled, "enabled");
         GET(double, threshold_g, "threshold");
-        GET(integer, shake_ms, "shake-ms");
-        GET(double, share, "share");
         GET(integer, cooldown_ms, "cooldown-ms");
         GET(boolean, screen_off, "screen-off");
         GET(boolean, vibrate, "vibrate");
@@ -125,10 +122,8 @@ static void load_settings(void)
         GET(boolean, log_movement, "log-movement");
 #undef GET
     }
-    app.threshold_g = CLAMP(app.threshold_g, 0.3, 4.0);
-    app.shake_ms = CLAMP(app.shake_ms, 200, 3000);
-    app.share = CLAMP(app.share, 0.1, 1.0);
-    app.cooldown_ms = CLAMP(app.cooldown_ms, 300, 10000);
+    app.threshold_g = CLAMP(app.threshold_g, 0.5, 6.0);
+    app.cooldown_ms = CLAMP(app.cooldown_ms, 200, 10000);
     app.buzz_on_ms = CLAMP(app.buzz_on_ms, 10, 2000);
     app.buzz_gap_ms = CLAMP(app.buzz_gap_ms, 50, 2000);
     app.buzz_off_ms = CLAMP(app.buzz_off_ms, 10, 2000);
@@ -238,17 +233,37 @@ static void vibrate(gboolean on)
 
 /* Shake detection
  *
- * How far the total acceleration is from 1 g: zero at rest however the phone is held,
- * large while it's shaken (it speeds up and slows down hard, back and forth). One step
- * or bump gives a short spike; a shake keeps it high. So: switch when, over the last
- * shake-ms, at least a share of the readings were over the threshold.
+ * Gravity is the average of the last second (a shake goes back and forth, so it averages
+ * out); what's left is how the phone is being moved. A shake, like Motorola's chop, is a
+ * hard swing one way and back again: within the last 0.6 s, the strongest movement is
+ * over the threshold, and along the same line the other way there is at least 60% of
+ * the threshold. A step or putting the phone down is mostly one way.
+ * After switching it waits until the phone is calm (under 0.8 g for 0.25 s), and at
+ * least cooldown-ms, so one long shake doesn't switch it on and off.
  *
- * Measured on the FLX1s (2026-11-10), as the strongest point of each movement with
- * gravity taken out: walking and handling 0.5 to 1.25 g, firm shakes 1.8 to 9 g. */
+ * Tuned on a recording from the FLX1s (2026-11-10, user's hand): walking peaked at
+ * 1.25 g, gentle shakes at 1.5 to 2 g, normal ones at 4 to 10 g. At 1.4 g it caught 28
+ * of 36 separate bursts and nothing while walking; see README.md. */
+
+#define GRAVITY_US 1000000
+#define SWING_US 600000
+#define BACK 0.6
+#define CALM_G 0.8
+#define CALM_US 250000
+
+static void reset_detector(void)
+{
+    app.gn = app.gfirst = 0;
+    app.gsx = app.gsy = app.gsz = 0;
+    app.mn = app.mfirst = 0;
+    app.armed = TRUE;
+    app.calm_since = 0;
+}
 
 static void shaken(guint64 t)
 {
-    app.n = 0;
+    app.armed = FALSE;
+    app.calm_since = 0;
     app.quiet_until = t + (guint64)app.cooldown_ms * 1000;
     if (app.replay) {
         g_print("%8.2f s  SHAKE\n", t / 1e6);
@@ -268,7 +283,23 @@ static void on_reading(guint64 t, double x, double y, double z)
     if (app.record)
         fprintf(app.record, "%" G_GUINT64_FORMAT " %.1f %.1f %.1f\n", t, x, y, z);
     x /= 1000.0, y /= 1000.0, z /= 1000.0;  /* milli-g to g */
-    double m = fabs(sqrt(x * x + y * y + z * z) - 1.0);
+
+    /* Gravity: the average of the last second. */
+    if (app.gn == WINDOW_MAX) {
+        app.gsx -= app.grav[app.gfirst].x, app.gsy -= app.grav[app.gfirst].y,
+        app.gsz -= app.grav[app.gfirst].z;
+        app.gfirst = (app.gfirst + 1) % WINDOW_MAX, app.gn--;
+    }
+    int gi = (app.gfirst + app.gn++) % WINDOW_MAX;
+    app.grav[gi].t = t, app.grav[gi].x = x, app.grav[gi].y = y, app.grav[gi].z = z;
+    app.gsx += x, app.gsy += y, app.gsz += z;
+    while (app.gn > 1 && t - app.grav[app.gfirst].t > GRAVITY_US) {
+        app.gsx -= app.grav[app.gfirst].x, app.gsy -= app.grav[app.gfirst].y,
+        app.gsz -= app.grav[app.gfirst].z;
+        app.gfirst = (app.gfirst + 1) % WINDOW_MAX, app.gn--;
+    }
+    double mx = x - app.gsx / app.gn, my = y - app.gsy / app.gn, mz = z - app.gsz / app.gn;
+    double m = sqrt(mx * mx + my * my + mz * mz);
 
     if (app.monitor && !app.replay) {
         app.print_max = MAX(app.print_max, m);
@@ -293,29 +324,44 @@ static void on_reading(guint64 t, double x, double y, double z)
         }
     }
 
-    if (t < app.quiet_until)
+    if (!app.armed) {
+        /* Wait for calm, then start afresh. */
+        if (m >= CALM_G)
+            app.calm_since = 0;
+        else if (!app.calm_since)
+            app.calm_since = t;
+        if (app.calm_since && t - app.calm_since >= CALM_US && t >= app.quiet_until) {
+            app.armed = TRUE;
+            app.mn = app.mfirst = 0;
+        }
         return;
-    /* Keep the readings of the last shake-ms. */
-    guint64 span = (guint64)app.shake_ms * 1000;
-    if (app.n == WINDOW_MAX) {
-        app.first = (app.first + 1) % WINDOW_MAX;
-        app.n--;
     }
-    int last = (app.first + app.n) % WINDOW_MAX;
-    app.when[last] = t;
-    app.over[last] = m >= app.threshold_g;
-    app.n++;
-    while (app.n > 0 && t - app.when[app.first] > span) {
-        app.first = (app.first + 1) % WINDOW_MAX;
-        app.n--;
+
+    /* Movement of the last 0.6 s. */
+    if (app.mn == WINDOW_MAX)
+        app.mfirst = (app.mfirst + 1) % WINDOW_MAX, app.mn--;
+    int mi = (app.mfirst + app.mn++) % WINDOW_MAX;
+    app.mov[mi].t = t, app.mov[mi].x = mx, app.mov[mi].y = my, app.mov[mi].z = mz, app.mov[mi].m = m;
+    while (app.mn > 1 && t - app.mov[app.mfirst].t > SWING_US)
+        app.mfirst = (app.mfirst + 1) % WINDOW_MAX, app.mn--;
+
+    /* The strongest, and the strongest the other way along the same line. */
+    int best = app.mfirst;
+    for (int i = 0; i < app.mn; i++) {
+        int k = (app.mfirst + i) % WINDOW_MAX;
+        if (app.mov[k].m > app.mov[best].m)
+            best = k;
     }
-    /* Only judge a full window: readings arrive every 20 ms. */
-    if (t - app.when[app.first] < span - 40000 || app.n < 5)
+    double peak = app.mov[best].m;
+    if (peak < app.threshold_g)
         return;
-    int over = 0;
-    for (int i = 0; i < app.n; i++)
-        over += app.over[(app.first + i) % WINDOW_MAX];
-    if (over >= app.share * app.n)
+    double ux = app.mov[best].x / peak, uy = app.mov[best].y / peak, uz = app.mov[best].z / peak;
+    double back = 0;
+    for (int i = 0; i < app.mn; i++) {
+        int k = (app.mfirst + i) % WINDOW_MAX;
+        back = MAX(back, -(app.mov[k].x * ux + app.mov[k].y * uy + app.mov[k].z * uz));
+    }
+    if (back >= app.threshold_g * BACK)
         shaken(t);
 }
 
@@ -442,9 +488,9 @@ static void start_sensor(void)
         restart_later();
         return;
     }
-    app.n = 0;
-    g_message("Watching the accelerometer (session %d; %.2f g for %d ms%s)",
-              app.sid, app.threshold_g, app.shake_ms,
+    reset_detector();
+    g_message("Watching the accelerometer (session %d; swings of %.2f g%s)",
+              app.sid, app.threshold_g,
               app.screen_off ? "; also with the screen off" : "");
 }
 
@@ -494,9 +540,10 @@ static gboolean on_quit(gpointer _)
 
 static gboolean on_reload(gpointer _)
 {
+    gboolean screen_off = app.screen_off;
     load_settings();
-    g_message("Settings reloaded");
-    if (app.sid >= 0) {  /* screen-off may have changed */
+    g_message("Settings reloaded (swings of %.2f g)", app.threshold_g);
+    if (app.sid >= 0 && screen_off != app.screen_off) {
         stop_sensor();
         start_sensor();
     }
@@ -549,6 +596,7 @@ int main(int argc, char **argv)
     }
 
     load_settings();
+    reset_detector();
     if (replay_file)
         return replay(replay_file);
     app.sid = -1;

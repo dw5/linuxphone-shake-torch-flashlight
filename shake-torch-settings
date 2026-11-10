@@ -17,8 +17,8 @@ CONFIG = Path(GLib.get_user_config_dir()) / "shake-torch.conf"
 GROUP = "shake-torch"
 VIBRATOR = Path("/sys/class/leds/vibrator")
 # Same defaults as the service.
-DEFAULTS = {"enabled": True, "threshold": 1.0, "vibrate": True,
-            "buzz-on-ms": 150, "buzz-gap-ms": 250, "buzz-off-ms": 300}
+DEFAULTS = {"enabled": True, "threshold": 1.4, "vibrate": True,
+            "buzz-on-ms": 250, "buzz-gap-ms": 50, "buzz-off-ms": 275}
 
 
 def buzz(ms):
@@ -50,12 +50,13 @@ class Window(Adw.ApplicationWindow):
         main.add(self.enabled)
         main.add(self.status)
 
-        self.threshold = self.slider(0.5, 2.5, 0.05, self.get("threshold"), 2)
+        self.threshold = self.slider(0.8, 4.0, 0.1, self.get("threshold"), 1)
         hard = Adw.PreferencesGroup(
             title="How hard to shake",
-            description="Left: a lighter shake is enough, but walking or a bump may set it off. "
-                        "Right: needs a firmer shake. Measured: walking up to about 1.25, "
-                        "firm shakes 2 to 9.")
+            description="A shake is a swing one way and back, like a chop. Left: a gentle "
+                        "one is enough, but walking may set it off. Right: needs a firmer one. "
+                        "Measured on this phone: walking up to 1.25 g, gentle shakes 1.5 to 2 g, "
+                        "normal ones 4 to 10 g.")
         hard.add(self.slider_row("Strength", self.threshold, "{:.2f} g"))
 
         self.vibrate = Adw.SwitchRow(title="Vibrate", subtitle="Also when the phone is set to silent",
@@ -111,6 +112,9 @@ class Window(Adw.ApplicationWindow):
         s = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
         s.set_value(value)
         s.set_digits(digits)
+        s.set_round_digits(digits)
+        # Snap to the step, so a drag gives 250 rather than 249.
+        s.connect("change-value", lambda sc, _scroll, v: (sc.set_value(round(v / step) * step), True)[1])
         s.set_hexpand(True)
         s.set_draw_value(False)
         s.connect("value-changed", self.changed)
@@ -157,7 +161,7 @@ class Window(Adw.ApplicationWindow):
         self.save_id = 0
         kf = self.keyfile
         kf.set_boolean(GROUP, "enabled", self.enabled.get_active())
-        kf.set_double(GROUP, "threshold", round(self.threshold.get_value(), 2))
+        kf.set_double(GROUP, "threshold", round(self.threshold.get_value(), 1))
         kf.set_boolean(GROUP, "vibrate", self.vibrate.get_active())
         kf.set_integer(GROUP, "buzz-on-ms", int(self.on_ms.get_value()))
         kf.set_integer(GROUP, "buzz-gap-ms", int(self.gap_ms.get_value()))

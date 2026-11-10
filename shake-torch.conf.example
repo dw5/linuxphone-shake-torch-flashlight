@@ -2,22 +2,19 @@
 [shake-torch]
 # false: keep running but don't switch the torch
 enabled=true
-# How far from 1 g a reading must be to count as shaking. Lower is easier to trigger.
-threshold=1.0
-# How long the shaking must last, and what share of the readings in that time must be
-# over the threshold.
-shake-ms=500
-share=0.5
-# After switching, ignore movement this long.
-cooldown-ms=1500
+# How hard the strongest swing must be, in g with gravity taken out; the swing back must
+# reach 60% of it. Lower is easier to trigger. Walking peaks at about 1.25.
+threshold=1.4
+# At least this long between two switches (it also waits for the phone to be calm).
+cooldown-ms=800
 # Keep the accelerometer on while the screen is off (sensorfwd's standby override).
 # FuriOS doesn't pause it anyway; Sailfish does. Costs battery; see README.md.
 screen-off=true
 # Vibrate when the torch switches, also in the silent profile: torch on is two buzzes
 # with a pause between, torch off is one. Lengths in ms.
 vibrate=true
-buzz-on-ms=150
-buzz-gap-ms=250
-buzz-off-ms=300
+buzz-on-ms=250
+buzz-gap-ms=50
+buzz-off-ms=275
 # Log every movement over 0.4 g to the journal, for tuning.
 log-movement=false
