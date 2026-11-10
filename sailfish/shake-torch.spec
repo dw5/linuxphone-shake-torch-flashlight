@@ -24,6 +24,10 @@ ln -s ../shake-torch.service %{buildroot}%{_userunitdir}/user-session.target.wan
 install -Dm644 %{_sourcedir}/shake-torch.json %{buildroot}%{_datadir}/jolla-settings/entries/shake-torch.json
 install -Dm644 %{_sourcedir}/shake-torch.qml %{buildroot}%{_datadir}/jolla-settings/pages/shake-torch/shake-torch.qml
 install -Dm644 %{_sourcedir}/ShakeTorchSwitch.qml %{buildroot}%{_datadir}/jolla-settings/pages/shake-torch/ShakeTorchSwitch.qml
+install -Dm644 %{_sourcedir}/shake-torch.desktop %{buildroot}%{_datadir}/applications/shake-torch.desktop
+for size in 86 108 128 172; do
+    install -Dm644 %{_sourcedir}/shake-torch-$size.png %{buildroot}%{_datadir}/icons/hicolor/${size}x${size}/apps/shake-torch.png
+done
 
 %post
 # Pick up the new program in running sessions (systemctl-user is Sailfish's helper for this).
@@ -44,3 +48,5 @@ systemctl-user daemon-reload || :
 %{_userunitdir}/user-session.target.wants/shake-torch.service
 %{_datadir}/jolla-settings/entries/shake-torch.json
 %{_datadir}/jolla-settings/pages/shake-torch
+%{_datadir}/applications/shake-torch.desktop
+%{_datadir}/icons/hicolor/*/apps/shake-torch.png

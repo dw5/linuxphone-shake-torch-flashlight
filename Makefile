@@ -12,13 +12,15 @@ shake-torch: shake-torch.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 # Sailfish OS package (aarch64, for the Jolla Phone): the same binary, plus a user
-# service and a page in the Settings app. Needs rpm in the container.
-VERSION = 0.5
+# service, a page in the Settings app, a Top menu toggle and an app grid icon that opens
+# the page. Needs rpm and rsvg-convert (librsvg2-bin) in the container.
+VERSION = 0.6
 RPMDIR = $(CURDIR)/rpm
-rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml sailfish/ShakeTorchSwitch.qml
+rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml sailfish/ShakeTorchSwitch.qml sailfish/shake-torch.desktop shake-torch.svg
 	rm -rf $(RPMDIR) && mkdir -p $(RPMDIR)/SOURCES
 	$(CROSS)strip -o $(RPMDIR)/SOURCES/shake-torch shake-torch
-	cp sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml sailfish/ShakeTorchSwitch.qml $(RPMDIR)/SOURCES/
+	cp sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml sailfish/ShakeTorchSwitch.qml sailfish/shake-torch.desktop $(RPMDIR)/SOURCES/
+	for size in 86 108 128 172; do rsvg-convert -w $$size -h $$size -o $(RPMDIR)/SOURCES/shake-torch-$$size.png shake-torch.svg; done
 	rpmbuild -bb --target aarch64 --define '_topdir $(RPMDIR)' --define '_userunitdir /usr/lib/systemd/user' \
 		--define 'version $(VERSION)' --define '_bindir /usr/bin' --define '_datadir /usr/share' \
 		sailfish/shake-torch.spec

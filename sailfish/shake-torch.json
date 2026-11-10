@@ -4,7 +4,7 @@
             "path": "system_settings/look_and_feel/shake_torch",
             "title": "Shake for torch",
             "type": "page",
-            "icon": "image://theme/icon-m-flashlight",
+            "icon": "image://theme/icon-m-gesture",
             "order": 281,
             "params": {
                 "source": "/usr/share/jolla-settings/pages/shake-torch/shake-torch.qml"
@@ -14,7 +14,7 @@
             "path": "system_settings/look_and_feel/shake_torch/enable_switch",
             "title": "Shake for torch",
             "type": "custom",
-            "icon": "image://theme/icon-m-flashlight",
+            "icon": "image://theme/icon-m-gesture",
             "params": {
                 "source": "/usr/share/jolla-settings/pages/shake-torch/ShakeTorchSwitch.qml",
                 "type": "grid"

@@ -11,7 +11,7 @@ SettingsToggle {
     property bool running: false
 
     name: "Shake for torch"
-    icon.source: "image://theme/icon-m-flashlight"
+    icon.source: "image://theme/icon-m-gesture"
     checked: false
 
     onToggled: {
@@ -35,6 +35,12 @@ SettingsToggle {
             root.running = false
             root.checked = false
         })
+    }
+
+    menu: ContextMenu {
+        SettingsMenuItem {
+            onClicked: settingsApp.call("showPage", ["system_settings/look_and_feel/shake_torch"])
+        }
     }
 
     Component.onCompleted: refresh()
@@ -62,6 +68,14 @@ SettingsToggle {
         service: "local.ShakeTorch"
         path: "/local/ShakeTorch"
         iface: "local.ShakeTorch"
+    }
+
+    DBusInterface {
+        id: settingsApp
+        bus: DBus.SessionBus
+        service: "com.jolla.settings"
+        path: "/com/jolla/settings/ui"
+        iface: "com.jolla.settings.ui"
     }
 
     DBusInterface {

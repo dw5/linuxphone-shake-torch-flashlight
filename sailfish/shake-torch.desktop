@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Shake Torch
+Comment=Shake the phone to switch the torch
+Icon=shake-torch
+# The settings live in the Settings app; this opens them there.
+Exec=dbus-send --session --type=method_call --dest=com.jolla.settings /com/jolla/settings/ui com.jolla.settings.ui.showPage string:system_settings/look_and_feel/shake_torch
