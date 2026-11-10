@@ -36,8 +36,12 @@ Underneath it's `~/.config/shake-torch.conf`, see `shake-torch.conf.example`. Af
 - `shake-torch --record FILE`: also save every reading; `shake-torch --replay FILE` runs the detector over it and prints where it would switch, without touching the torch.
 - `log-movement=true` in the settings logs every movement over 0.4 g. On FuriOS the user journal needs root to read: `sudo journalctl _SYSTEMD_USER_UNIT=shake-torch.service -b`.
 
-## Not done yet
+## Status
 
-- **Battery with the screen off.** It works with the screen off: FuriOS on the FLX1s never deep-sleeps (0 suspends; `batman` throttles the processor instead), and its sensorfwd kept sending all readings with the screen locked, with or without `screen-off` (sensorfwd's standby override, on by default for Sailfish's sake). Processor time while listening: about 250 ms a minute for `shake-torch` and 1.3 s a minute for sensorfwd (0.4% and 2% of one core). Battery drain over hours is not measured yet.
-- **Sailfish:** not built yet. Needs a build against Sailfish's GLib (the Sailfish SDK, or the phone's copied root filesystem as a sysroot).
-- Settings app on Sailfish (a QML page).
+Works on the FLX1s (2026-11-10), checked by the user side by side with a Motorola: gentle and normal shakes switch it on and off, setting the phone on a table doesn't.
+
+Not done yet:
+
+- **Sailfish:** not built yet. Needs a build against Sailfish's GLib (the Sailfish SDK, or the phone's copied root filesystem as a sysroot), and a QML settings page.
+- **Battery over hours** with the screen off is not measured; processor time is (see above).
+- A Codex review.
