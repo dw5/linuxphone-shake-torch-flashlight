@@ -34,6 +34,7 @@ Page {
             threshold.value = s["threshold"]
             vibrate.checked = s["vibrate"]
             onMs.value = s["buzz-on-ms"]
+            secondMs.value = s["buzz-second-ms"]
             gapMs.value = s["buzz-gap-ms"]
             offMs.value = s["buzz-off-ms"]
             sensing = s["running"]
@@ -54,6 +55,7 @@ Page {
     function tryBuzz(on) {
         service.typedCall("TryBuzz", [{ "type": "b", "value": on },
                                       { "type": "i", "value": Math.round(onMs.value) },
+                                      { "type": "i", "value": Math.round(secondMs.value) },
                                       { "type": "i", "value": Math.round(gapMs.value) },
                                       { "type": "i", "value": Math.round(offMs.value) }])
     }
@@ -179,9 +181,18 @@ Page {
                     id: onMs
                     width: parent.width
                     minimumValue: 10; maximumValue: 500; stepSize: 10; value: 250
-                    label: "Torch on, each buzz"
+                    label: "Torch on, first buzz"
                     valueText: Math.round(value) + " ms"
                     onValueChanged: saveTimer.later("buzz-on-ms", Math.round(value))
+                }
+
+                Slider {
+                    id: secondMs
+                    width: parent.width
+                    minimumValue: 10; maximumValue: 500; stepSize: 10; value: 250
+                    label: "Torch on, second buzz"
+                    valueText: Math.round(value) + " ms"
+                    onValueChanged: saveTimer.later("buzz-second-ms", Math.round(value))
                 }
 
                 Slider {

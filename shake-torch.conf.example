@@ -14,6 +14,8 @@ screen-off=true
 # with a pause between, torch off is one. Lengths in ms.
 vibrate=true
 buzz-on-ms=250
+# The second "on" buzz; 0 or left out: as long as the first.
+buzz-second-ms=0
 buzz-gap-ms=50
 buzz-off-ms=275
 # Log every movement over 0.4 g to the journal, for tuning.

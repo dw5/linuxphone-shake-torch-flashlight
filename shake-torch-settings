@@ -18,7 +18,7 @@ GROUP = "shake-torch"
 VIBRATOR = Path("/sys/class/leds/vibrator")
 # Same defaults as the service.
 DEFAULTS = {"enabled": True, "threshold": 1.4, "vibrate": True,
-            "buzz-on-ms": 250, "buzz-gap-ms": 50, "buzz-off-ms": 275}
+            "buzz-on-ms": 250, "buzz-second-ms": 0, "buzz-gap-ms": 50, "buzz-off-ms": 275}
 
 
 def buzz(ms):
@@ -63,6 +63,8 @@ class Window(Adw.ApplicationWindow):
                                      active=self.get("vibrate"))
         self.vibrate.connect("notify::active", self.changed)
         self.on_ms = self.slider(10, 500, 10, self.get("buzz-on-ms"), 0)
+        # 0 in the file means "as long as the first".
+        self.second_ms = self.slider(10, 500, 10, self.get("buzz-second-ms") or self.get("buzz-on-ms"), 0)
         self.gap_ms = self.slider(50, 800, 10, self.get("buzz-gap-ms"), 0)
         self.off_ms = self.slider(10, 1000, 10, self.get("buzz-off-ms"), 0)
         try_on = Gtk.Button(label="Try torch on", hexpand=True)
@@ -77,7 +79,8 @@ class Window(Adw.ApplicationWindow):
         vib = Adw.PreferencesGroup(title="Vibration",
                                    description="Torch on: two buzzes with a pause. Torch off: one buzz.")
         for r in (self.vibrate,
-                  self.slider_row("Torch on, each buzz", self.on_ms, "{:.0f} ms"),
+                  self.slider_row("Torch on, first buzz", self.on_ms, "{:.0f} ms"),
+                  self.slider_row("Torch on, second buzz", self.second_ms, "{:.0f} ms"),
                   self.slider_row("Torch on, pause between", self.gap_ms, "{:.0f} ms"),
                   self.slider_row("Torch off, buzz", self.off_ms, "{:.0f} ms")):
             vib.add(r)
@@ -141,11 +144,12 @@ class Window(Adw.ApplicationWindow):
         self.timers = []
         if on:
             length = self.on_ms.get_value()
+            second_length = self.second_ms.get_value()
             buzz(length)
 
             def second():
                 self.timers = []
-                buzz(length)
+                buzz(second_length)
                 return GLib.SOURCE_REMOVE
             self.timers.append(GLib.timeout_add(int(length + self.gap_ms.get_value()), second))
         else:
@@ -164,6 +168,7 @@ class Window(Adw.ApplicationWindow):
         kf.set_double(GROUP, "threshold", round(self.threshold.get_value(), 1))
         kf.set_boolean(GROUP, "vibrate", self.vibrate.get_active())
         kf.set_integer(GROUP, "buzz-on-ms", int(self.on_ms.get_value()))
+        kf.set_integer(GROUP, "buzz-second-ms", int(self.second_ms.get_value()))
         kf.set_integer(GROUP, "buzz-gap-ms", int(self.gap_ms.get_value()))
         kf.set_integer(GROUP, "buzz-off-ms", int(self.off_ms.get_value()))
         try:

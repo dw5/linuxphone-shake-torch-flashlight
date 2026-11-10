@@ -52,7 +52,7 @@ typedef struct {
     int cooldown_ms;      /* at least this long between two switches */
     gboolean screen_off;  /* keep the sensor running with the screen off */
     gboolean vibrate;
-    int buzz_on_ms, buzz_gap_ms, buzz_off_ms;  /* on: two buzzes with a pause; off: one */
+    int buzz_on_ms, buzz_second_ms, buzz_gap_ms, buzz_off_ms;  /* on: two buzzes with a pause; off: one */
     gboolean log_movement;  /* log each movement's strength, for tuning */
 
     gboolean monitor;
@@ -100,6 +100,7 @@ static void load_settings(void)
     app.screen_off = TRUE;
     app.vibrate = TRUE;
     app.buzz_on_ms = 250;
+    app.buzz_second_ms = 0;  /* 0: as long as the first */
     app.buzz_gap_ms = 50;
     app.buzz_off_ms = 275;
     app.log_movement = FALSE;
@@ -119,6 +120,7 @@ static void load_settings(void)
         GET(boolean, screen_off, "screen-off");
         GET(boolean, vibrate, "vibrate");
         GET(integer, buzz_on_ms, "buzz-on-ms");
+        GET(integer, buzz_second_ms, "buzz-second-ms");
         GET(integer, buzz_gap_ms, "buzz-gap-ms");
         GET(integer, buzz_off_ms, "buzz-off-ms");
         GET(boolean, log_movement, "log-movement");
@@ -127,6 +129,9 @@ static void load_settings(void)
     app.threshold_g = CLAMP(app.threshold_g, 0.5, 6.0);
     app.cooldown_ms = CLAMP(app.cooldown_ms, 200, 10000);
     app.buzz_on_ms = CLAMP(app.buzz_on_ms, 10, 2000);
+    if (app.buzz_second_ms <= 0)
+        app.buzz_second_ms = app.buzz_on_ms;
+    app.buzz_second_ms = CLAMP(app.buzz_second_ms, 10, 2000);
     app.buzz_gap_ms = CLAMP(app.buzz_gap_ms, 50, 2000);
     app.buzz_off_ms = CLAMP(app.buzz_off_ms, 10, 2000);
 }
@@ -154,32 +159,56 @@ static guint32 furios_prop(const char *prop, GError **error)
     return g_variant_is_of_type(v, G_VARIANT_TYPE_UINT32) ? g_variant_get_uint32(v) : 0;
 }
 
-/* Switch the torch; returns whether it is now on, -1 if no torch answered. */
-static int toggle_torch(void)
+static gboolean furios_torch;  /* which torch service answered torch_state() */
+
+/* Whether the torch is on: 1 or 0, -1 if no torch service answered. */
+static int torch_state(void)
 {
     g_autoptr(GError) e = NULL;
     guint32 now = furios_prop("Brightness", &e);
-    if (!e) {
-        guint32 want = now ? 0 : furios_prop("MaxBrightness", NULL);
-        if (!now && !want)
-            want = 1;
-        g_autoptr(GVariant) r = call(app.session, FURIOS_TORCH, FURIOS_TORCH_PATH, FURIOS_TORCH,
-                                     "SetBrightness", g_variant_new("(u)", want), NULL, &e);
-        if (r)
-            return want > 0;
-        g_warning("FuriOS torch: %s", e->message);
-        return -1;
-    }
+    furios_torch = !e;
+    if (!e)
+        return now > 0;
     g_clear_error(&e);
-    g_autoptr(GVariant) r = call(app.session, SAILFISH_TORCH, SAILFISH_TORCH_PATH, SAILFISH_TORCH,
-                                 "toggleFlashlight", NULL, "(b)", &e);
+    g_autoptr(GVariant) r = call(app.session, SAILFISH_TORCH, SAILFISH_TORCH_PATH,
+                                 "org.freedesktop.DBus.Properties", "Get",
+                                 g_variant_new("(ss)", SAILFISH_TORCH, "flashlightOn"), "(v)", &e);
     if (r) {
-        gboolean on;
-        g_variant_get(r, "(b)", &on);
-        return on;
+        g_autoptr(GVariant) v = NULL;
+        g_variant_get(r, "(v)", &v);
+        if (g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN))
+            return g_variant_get_boolean(v);
     }
-    g_warning("No torch service answered (%s, %s): %s", FURIOS_TORCH, SAILFISH_TORCH, e->message);
+    g_warning("No torch service answered (%s, %s): %s", FURIOS_TORCH, SAILFISH_TORCH,
+              e ? e->message : "flashlightOn isn't a boolean");
     return -1;
+}
+
+static void torch_set(GObject *bus, GAsyncResult *res, gpointer done)
+{
+    g_autoptr(GError) e = NULL;
+    g_autoptr(GVariant) r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(bus), res, &e);
+    if (!r)
+        g_warning("Torch: %s", e->message);
+    if (done)
+        ((GSourceFunc)done)(NULL);
+}
+
+/* Switch the torch to the other state than torch_state() just gave, without waiting
+ * for it: on Sailfish the torch can take a moment, more so with the screen off, and
+ * the buzz shouldn't wait for it. "done", if given, is called once it has answered. */
+static void set_torch(gboolean on, GSourceFunc done)
+{
+    if (furios_torch) {
+        guint32 want = on ? MAX(furios_prop("MaxBrightness", NULL), 1) : 0;
+        g_dbus_connection_call(app.session, FURIOS_TORCH, FURIOS_TORCH_PATH, FURIOS_TORCH,
+                               "SetBrightness", g_variant_new("(u)", want), NULL,
+                               G_DBUS_CALL_FLAGS_NONE, 5000, NULL, torch_set, done);
+    } else {
+        g_dbus_connection_call(app.session, SAILFISH_TORCH, SAILFISH_TORCH_PATH, SAILFISH_TORCH,
+                               "toggleFlashlight", NULL, G_VARIANT_TYPE("(b)"),
+                               G_DBUS_CALL_FLAGS_NONE, 5000, NULL, torch_set, done);
+    }
 }
 
 /* Buzz twice for on, once for off, so it can be told without looking. Always, also
@@ -213,12 +242,12 @@ static gboolean buzz_sysfs(gpointer ms)
     return G_SOURCE_REMOVE;
 }
 
-static void buzz_pattern(gboolean on, int on_ms, int gap_ms, int off_ms)
+static void buzz_pattern(gboolean on, int on_ms, int second_ms, int gap_ms, int off_ms)
 {
     if (access(VIBRATOR "/activate", W_OK) == 0) {
         if (on) {
             buzz_sysfs(GINT_TO_POINTER(on_ms));
-            g_timeout_add(on_ms + gap_ms, buzz_sysfs, GINT_TO_POINTER(on_ms));
+            g_timeout_add(on_ms + gap_ms, buzz_sysfs, GINT_TO_POINTER(second_ms));
         } else {
             buzz_sysfs(GINT_TO_POINTER(off_ms));
         }
@@ -235,7 +264,7 @@ static void buzz_pattern(gboolean on, int on_ms, int gap_ms, int off_ms)
 static void vibrate(gboolean on)
 {
     if (app.vibrate)
-        buzz_pattern(on, app.buzz_on_ms, app.buzz_gap_ms, app.buzz_off_ms);
+        buzz_pattern(on, app.buzz_on_ms, app.buzz_second_ms, app.buzz_gap_ms, app.buzz_off_ms);
 }
 
 /* Shake detection
@@ -286,17 +315,21 @@ static void shaken(guint64 t)
     }
     if (!app.enabled)
         return;
-    int on = toggle_torch();
-    if (on >= 0) {
-        g_message("Shake: torch %s", on ? "on" : "off");
-        vibrate(on);
-    }
+    /* Buzz first, then switch: the buzz is what says it worked. */
+    int was = torch_state();
+    if (was < 0)
+        return;
+    g_message("Shake: torch %s", was ? "off" : "on");
+    vibrate(!was);
+    set_torch(!was, NULL);
 }
 
 static void on_reading(guint64 t, double x, double y, double z)
 {
     if (app.record)
-        fprintf(app.record, "%" G_GUINT64_FORMAT " %.1f %.1f %.1f\n", t, x, y, z);
+        /* the reading's time, x, y, z, and when it arrived here (monotonic, us) */
+        fprintf(app.record, "%" G_GUINT64_FORMAT " %.1f %.1f %.1f %" G_GINT64_FORMAT "\n",
+                t, x, y, z, app.replay ? 0 : g_get_monotonic_time());
     x /= 1000.0, y /= 1000.0, z /= 1000.0;  /* milli-g to g */
 
     /* Gravity: the average of the last second. */
@@ -585,7 +618,8 @@ static gboolean on_reload(gpointer _)
  * the vibrator. Session bus, local.ShakeTorch at /local/ShakeTorch.
  *   GetSettings() -> a{sv}            the current settings, and "running"
  *   Set(s key, s value)               change one setting; saved to the config file
- *   TryBuzz(b on, i on, i gap, i off) buzz once as for torch on or off, with these lengths */
+ *   TryBuzz(b on, i first, i second, i gap, i off)
+ *                                     buzz as for torch on or off, with these lengths */
 #define BUS_NAME "local.ShakeTorch"
 #define BUS_PATH "/local/ShakeTorch"
 
@@ -595,13 +629,14 @@ static const char introspection[] =
     "<method name='Set'><arg type='s' name='key' direction='in'/>"
     "<arg type='s' name='value' direction='in'/></method>"
     "<method name='TryBuzz'><arg type='b' name='on' direction='in'/>"
-    "<arg type='i' name='on_ms' direction='in'/><arg type='i' name='gap_ms' direction='in'/>"
+    "<arg type='i' name='on_ms' direction='in'/><arg type='i' name='second_ms' direction='in'/>"
+    "<arg type='i' name='gap_ms' direction='in'/>"
     "<arg type='i' name='off_ms' direction='in'/></method>"
     "</interface></node>";
 
 static const struct { const char *key; char type; } setting_keys[] = {
     { "enabled", 'b' }, { "threshold", 'd' }, { "cooldown-ms", 'i' }, { "screen-off", 'b' },
-    { "vibrate", 'b' }, { "buzz-on-ms", 'i' }, { "buzz-gap-ms", 'i' }, { "buzz-off-ms", 'i' },
+    { "vibrate", 'b' }, { "buzz-on-ms", 'i' }, { "buzz-second-ms", 'i' }, { "buzz-gap-ms", 'i' }, { "buzz-off-ms", 'i' },
     { "log-movement", 'b' },
 };
 
@@ -656,6 +691,7 @@ static void on_method(GDBusConnection *c, const char *sender, const char *path, 
         g_variant_builder_add(&b, "{sv}", "screen-off", g_variant_new_boolean(app.screen_off));
         g_variant_builder_add(&b, "{sv}", "vibrate", g_variant_new_boolean(app.vibrate));
         g_variant_builder_add(&b, "{sv}", "buzz-on-ms", g_variant_new_int32(app.buzz_on_ms));
+        g_variant_builder_add(&b, "{sv}", "buzz-second-ms", g_variant_new_int32(app.buzz_second_ms));
         g_variant_builder_add(&b, "{sv}", "buzz-gap-ms", g_variant_new_int32(app.buzz_gap_ms));
         g_variant_builder_add(&b, "{sv}", "buzz-off-ms", g_variant_new_int32(app.buzz_off_ms));
         g_variant_builder_add(&b, "{sv}", "running", g_variant_new_boolean(app.sid >= 0));
@@ -672,9 +708,10 @@ static void on_method(GDBusConnection *c, const char *sender, const char *path, 
         g_dbus_method_invocation_return_value(inv, NULL);
     } else if (g_str_equal(method, "TryBuzz")) {
         gboolean on;
-        gint32 on_ms, gap_ms, off_ms;
-        g_variant_get(args, "(biii)", &on, &on_ms, &gap_ms, &off_ms);
-        buzz_pattern(on, CLAMP(on_ms, 10, 2000), CLAMP(gap_ms, 50, 2000), CLAMP(off_ms, 10, 2000));
+        gint32 on_ms, second_ms, gap_ms, off_ms;
+        g_variant_get(args, "(biiii)", &on, &on_ms, &second_ms, &gap_ms, &off_ms);
+        buzz_pattern(on, CLAMP(on_ms, 10, 2000), CLAMP(second_ms, 10, 2000),
+                     CLAMP(gap_ms, 50, 2000), CLAMP(off_ms, 10, 2000));
         g_dbus_method_invocation_return_value(inv, NULL);
     }
 }
@@ -704,7 +741,10 @@ static int replay(const char *path)
     guint64 t;
     double x, y, z;
     int count = 0;
-    while (fscanf(f, "%" G_GUINT64_FORMAT " %lf %lf %lf", &t, &x, &y, &z) == 4) {
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        if (sscanf(line, "%" G_GUINT64_FORMAT " %lf %lf %lf", &t, &x, &y, &z) != 4)
+            continue;
         on_reading(t, x, y, z);
         count++;
     }
@@ -713,9 +753,12 @@ static int replay(const char *path)
     return 0;
 }
 
-static gboolean quit_loop(gpointer loop)
+static int toggle_waits;
+
+static gboolean toggle_step(gpointer _)
 {
-    g_main_loop_quit(loop);
+    if (--toggle_waits == 0)
+        g_main_loop_quit(app.loop);
     return G_SOURCE_REMOVE;
 }
 
@@ -759,16 +802,18 @@ int main(int argc, char **argv)
         return 1;
     }
     if (toggle) {
-        int on = toggle_torch();
-        if (on < 0)
+        int was = torch_state();
+        if (was < 0)
             return 1;
-        g_print("Torch %s\n", on ? "on" : "off");
-        vibrate(on);
-        if (on) {  /* let the second buzz happen */
-            g_autoptr(GMainLoop) l = g_main_loop_new(NULL, FALSE);
-            g_timeout_add(app.buzz_on_ms * 2 + app.buzz_gap_ms + 50, quit_loop, l);
-            g_main_loop_run(l);
-        }
+        g_print("Torch %s\n", was ? "off" : "on");
+        vibrate(!was);
+        /* Wait for the torch service, and for the buzz to finish. */
+        app.loop = g_main_loop_new(NULL, FALSE);
+        toggle_waits = 2;
+        set_torch(!was, toggle_step);
+        g_timeout_add(was ? app.buzz_off_ms : app.buzz_on_ms + app.buzz_gap_ms + app.buzz_second_ms,
+                      toggle_step, NULL);
+        g_main_loop_run(app.loop);
         return 0;
     }
     app.system = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &e);
