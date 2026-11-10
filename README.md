@@ -12,6 +12,26 @@ Shake the phone to switch the torch on or off, like Motorola's gesture. Two buzz
 
 Tuned on a 100 s recording of the user's hand on the FLX1s (2026-11-10): walking peaked at 1.25 g, gentle shakes at 1.5 to 2 g, normal ones (a chop) at 4 to 10 g, in bursts of about half a second. Two earlier methods failed on it: counting three alternating swings merged fast swings into one, and "how far the total is from 1 g" barely moves when the phone is shaken sideways (a 2 g sideways shake reads 1.2 g). Replayed through the current method: 25 of 36 separate bursts switched (the rest followed another within a second), nothing while walking.
 
+## How Motorola does it
+
+Read on 2026-11-10 from the user's Motorola Edge 30 Pro (Android 14, Moto Actions 08.78.10) over adb, without root. The APK is kept privately in `../reference/moto-actions/` (proprietary, don't publish).
+
+- **Detection isn't in the app.** It runs in the Qualcomm sensor hub as a wake-up sensor, `ChopChop Wakeup` (type `com.motorola.sensor.chopchop`), sampled at 1 kHz with the main processor asleep. That's why it reacts at once with the screen off. The app, `com.motorola.actions` (FlashOnChop), only listens for the event (value 1.0), then switches the torch through Android's camera torch API and buzzes.
+- **Its parameters** are in `/vendor/etc/sensors/config/mot_chopchop.json`, readable by anyone. The names are Motorola's; the meanings are a reading of the names, since the firmware itself is closed:
+
+  | Parameter | Value | Likely meaning |
+  | --- | --- | --- |
+  | `first_accel_threshold` | 32.0 | first chop at least 32 m/s² (3.3 g) |
+  | `second_accel_threshold` | 30.0 | second chop at least 30 m/s² (3.1 g) |
+  | `max_chop_duration_ms` | 350 | each chop over within 350 ms |
+  | `max_gyro_rotation` | 108.0 | rejected if the phone turns faster than this (probably °/s): a twist of the wrist isn't a chop |
+  | `min_magnitude_percentage` | 0.2 | unclear; maybe how strong the opposite swing must be |
+  | `max_xy_percentage` | 0.65 | at most 65% of the movement across the phone's x/y plane, so the chop has to run mostly along one direction |
+
+  So it is "chop twice", as Motorola's own name `chop_twice` says, and it uses the gyroscope as well as the accelerometer. shake-torch uses only the accelerometer.
+- **Buzz**, from Android's vibration log (`dumpsys vibrator_manager`): torch on is 200 ms, 100 ms pause, 400 ms. Torch off is 300 ms. Both at full strength. The buzz starts 25 to 45 ms after the chop event.
+- **Between switches:** in the user's tests the quickest on-then-off pairs were 1.7 to 2.1 s apart. shake-torch allows a switch again after 1.2 s.
+
 ## Build and install
 
 ### FuriOS
