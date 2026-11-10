@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Shake Torch
+Comment=Shake the phone to switch the torch
+Exec=shake-torch-settings
+Icon=shake-torch
+Terminal=false
+Categories=Settings;Utility;
+X-Purism-FormFactor=Workstation;Mobile;

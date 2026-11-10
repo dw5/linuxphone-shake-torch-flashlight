@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#2e3440"/>
+  <!-- light beam -->
+  <path d="M44 22 L84 22 L100 4 L28 4 Z" fill="#ffe08a" opacity="0.0"/>
+  <path d="M40 30 L88 30 L104 14 L24 14 Z" fill="#ffd54f" opacity="0.55"/>
+  <!-- head -->
+  <path d="M40 34 H88 L80 54 H48 Z" fill="#cfd8dc"/>
+  <rect x="44" y="34" width="40" height="6" rx="2" fill="#fff8e1"/>
+  <!-- body -->
+  <rect x="50" y="54" width="28" height="56" rx="6" fill="#90a4ae"/>
+  <rect x="58" y="66" width="12" height="16" rx="3" fill="#ffca28"/>
+  <!-- shake marks -->
+  <path d="M30 70 q-8 10 0 20 M98 70 q8 10 0 20" stroke="#ffd54f" stroke-width="5" fill="none" stroke-linecap="round"/>
+</svg>

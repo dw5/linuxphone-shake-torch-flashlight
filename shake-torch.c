@@ -53,6 +53,7 @@ typedef struct {
     int cooldown_ms;      /* after switching, ignore movement this long */
     gboolean screen_off;  /* keep the sensor running with the screen off */
     gboolean vibrate;
+    int buzz_on_ms, buzz_gap_ms, buzz_off_ms;  /* on: two buzzes with a pause; off: one */
     gboolean log_movement;  /* log each movement's strength, for tuning */
 
     gboolean monitor;
@@ -95,8 +96,11 @@ static void load_settings(void)
     app.shake_ms = 500;
     app.share = 0.5;
     app.cooldown_ms = 1500;
-    app.screen_off = FALSE;
+    app.screen_off = TRUE;
     app.vibrate = TRUE;
+    app.buzz_on_ms = 150;
+    app.buzz_gap_ms = 250;
+    app.buzz_off_ms = 300;
     app.log_movement = FALSE;
 
     g_autofree char *path = config_path();
@@ -115,6 +119,9 @@ static void load_settings(void)
         GET(integer, cooldown_ms, "cooldown-ms");
         GET(boolean, screen_off, "screen-off");
         GET(boolean, vibrate, "vibrate");
+        GET(integer, buzz_on_ms, "buzz-on-ms");
+        GET(integer, buzz_gap_ms, "buzz-gap-ms");
+        GET(integer, buzz_off_ms, "buzz-off-ms");
         GET(boolean, log_movement, "log-movement");
 #undef GET
     }
@@ -122,6 +129,9 @@ static void load_settings(void)
     app.shake_ms = CLAMP(app.shake_ms, 200, 3000);
     app.share = CLAMP(app.share, 0.1, 1.0);
     app.cooldown_ms = CLAMP(app.cooldown_ms, 300, 10000);
+    app.buzz_on_ms = CLAMP(app.buzz_on_ms, 10, 2000);
+    app.buzz_gap_ms = CLAMP(app.buzz_gap_ms, 50, 2000);
+    app.buzz_off_ms = CLAMP(app.buzz_off_ms, 10, 2000);
 }
 
 /* Torch */
@@ -211,10 +221,10 @@ static void vibrate(gboolean on)
         return;
     if (access(VIBRATOR "/activate", W_OK) == 0) {
         if (on) {
-            buzz_sysfs(GINT_TO_POINTER(60));
-            g_timeout_add(180, buzz_sysfs, GINT_TO_POINTER(60));
+            buzz_sysfs(GINT_TO_POINTER(app.buzz_on_ms));
+            g_timeout_add(app.buzz_on_ms + app.buzz_gap_ms, buzz_sysfs, GINT_TO_POINTER(app.buzz_on_ms));
         } else {
-            buzz_sysfs(GINT_TO_POINTER(80));
+            buzz_sysfs(GINT_TO_POINTER(app.buzz_off_ms));
         }
         return;
     }
@@ -565,7 +575,7 @@ int main(int argc, char **argv)
         vibrate(on);
         if (on) {  /* let the second buzz happen */
             g_autoptr(GMainLoop) l = g_main_loop_new(NULL, FALSE);
-            g_timeout_add(250, quit_loop, l);
+            g_timeout_add(app.buzz_on_ms * 2 + app.buzz_gap_ms + 50, quit_loop, l);
             g_main_loop_run(l);
         }
         return 0;

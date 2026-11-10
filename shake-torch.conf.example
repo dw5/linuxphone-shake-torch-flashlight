@@ -10,9 +10,14 @@ shake-ms=500
 share=0.5
 # After switching, ignore movement this long.
 cooldown-ms=1500
-# Keep the accelerometer on while the screen is off. Costs battery; see README.md.
-screen-off=false
-# A short vibration when the torch switches.
+# Keep the accelerometer on while the screen is off (sensorfwd's standby override).
+# FuriOS doesn't pause it anyway; Sailfish does. Costs battery; see README.md.
+screen-off=true
+# Vibrate when the torch switches, also in the silent profile: torch on is two buzzes
+# with a pause between, torch off is one. Lengths in ms.
 vibrate=true
+buzz-on-ms=150
+buzz-gap-ms=250
+buzz-off-ms=300
 # Log every movement over 0.4 g to the journal, for tuning.
 log-movement=false
