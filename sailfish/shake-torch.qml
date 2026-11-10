@@ -32,6 +32,8 @@ Page {
             loading = true
             enabledSwitch.checked = s["enabled"]
             threshold.value = s["threshold"]
+            rotation.value = s["max-rotation"]
+            notifySwitch.checked = s["notify"]
             vibrate.checked = s["vibrate"]
             onMs.value = s["buzz-on-ms"]
             secondMs.value = s["buzz-second-ms"]
@@ -141,6 +143,13 @@ Page {
                     onCheckedChanged: page.set("enabled", checked)
                 }
 
+                TextSwitch {
+                    id: notifySwitch
+                    text: "Notification while it's on"
+                    description: "\u201cFlashlight is on\u201d, tap to turn it off"
+                    onCheckedChanged: page.set("notify", checked)
+                }
+
                 SectionHeader { text: "How hard to shake" }
 
                 Slider {
@@ -167,6 +176,28 @@ Page {
                           + "ones 4 to 10 g."
                 }
 
+                SectionHeader { text: "Ignore twists" }
+
+                Slider {
+                    id: rotation
+                    width: parent.width
+                    minimumValue: 0; maximumValue: 360; stepSize: 10; value: 108
+                    label: "Most it may turn"
+                    valueText: value > 0 ? Math.round(value) + "\u00b0" : "Off"
+                    onValueChanged: saveTimer.later("max-rotation", Math.round(value))
+                }
+
+                Label {
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * x
+                    wrapMode: Text.Wrap
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    color: Theme.secondaryHighlightColor
+                    text: "Like Motorola: a chop moves the phone along a line, a flick of the wrist "
+                          + "turns it. A shake that turns the phone more than this doesn't count. "
+                          + "Motorola uses 108\u00b0."
+                }
+
                 SectionHeader { text: "Vibration" }
 
                 TextSwitch {
@@ -180,7 +211,7 @@ Page {
                 Slider {
                     id: onMs
                     width: parent.width
-                    minimumValue: 10; maximumValue: 500; stepSize: 10; value: 250
+                    minimumValue: 10; maximumValue: 500; stepSize: 10; value: 200
                     label: "Torch on, first buzz"
                     valueText: Math.round(value) + " ms"
                     onValueChanged: saveTimer.later("buzz-on-ms", Math.round(value))
@@ -189,7 +220,7 @@ Page {
                 Slider {
                     id: secondMs
                     width: parent.width
-                    minimumValue: 10; maximumValue: 500; stepSize: 10; value: 250
+                    minimumValue: 10; maximumValue: 500; stepSize: 10; value: 400
                     label: "Torch on, second buzz"
                     valueText: Math.round(value) + " ms"
                     onValueChanged: saveTimer.later("buzz-second-ms", Math.round(value))
@@ -198,7 +229,7 @@ Page {
                 Slider {
                     id: gapMs
                     width: parent.width
-                    minimumValue: 50; maximumValue: 800; stepSize: 10; value: 50
+                    minimumValue: 50; maximumValue: 800; stepSize: 10; value: 100
                     label: "Torch on, pause between"
                     valueText: Math.round(value) + " ms"
                     onValueChanged: saveTimer.later("buzz-gap-ms", Math.round(value))
@@ -207,7 +238,7 @@ Page {
                 Slider {
                     id: offMs
                     width: parent.width
-                    minimumValue: 10; maximumValue: 1000; stepSize: 10; value: 275
+                    minimumValue: 10; maximumValue: 1000; stepSize: 10; value: 300
                     label: "Torch off, buzz"
                     valueText: Math.round(value) + " ms"
                     onValueChanged: saveTimer.later("buzz-off-ms", Math.round(value))

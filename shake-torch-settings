@@ -17,8 +17,10 @@ CONFIG = Path(GLib.get_user_config_dir()) / "shake-torch.conf"
 GROUP = "shake-torch"
 VIBRATOR = Path("/sys/class/leds/vibrator")
 # Same defaults as the service.
-DEFAULTS = {"enabled": True, "threshold": 1.4, "vibrate": True,
-            "buzz-on-ms": 250, "buzz-second-ms": 0, "buzz-gap-ms": 50, "buzz-off-ms": 275}
+# Motorola's buzz: on is 200 ms, 100 ms pause, 400 ms; off is 300 ms.
+DEFAULTS = {"enabled": True, "threshold": 1.4, "max-rotation": 108.0, "notify": True,
+            "vibrate": True, "buzz-on-ms": 200, "buzz-second-ms": 400, "buzz-gap-ms": 100,
+            "buzz-off-ms": 300}
 
 
 def buzz(ms):
@@ -47,7 +49,12 @@ class Window(Adw.ApplicationWindow):
         self.status = Adw.ActionRow(title="Service", subtitle="Checking…")
         main = Adw.PreferencesGroup(
             description="Shake the phone firmly for about half a second. Works with the screen off too.")
+        self.notify = Adw.SwitchRow(title="Notification while it's on",
+                                    subtitle="\u201cFlashlight is on\u201d, tap to turn it off",
+                                    active=self.get("notify"))
+        self.notify.connect("notify::active", self.changed)
         main.add(self.enabled)
+        main.add(self.notify)
         main.add(self.status)
 
         self.threshold = self.slider(0.8, 4.0, 0.1, self.get("threshold"), 1)
@@ -58,6 +65,14 @@ class Window(Adw.ApplicationWindow):
                         "Measured on this phone: walking up to 1.25 g, gentle shakes 1.5 to 2 g, "
                         "normal ones 4 to 10 g.")
         hard.add(self.slider_row("Strength", self.threshold, "{:.2f} g"))
+        self.rotation = self.slider(0, 360, 10, self.get("max-rotation"), 0)
+        twist = Adw.PreferencesGroup(
+            title="Ignore twists",
+            description="Like Motorola: a chop moves the phone along a line, a flick of the wrist "
+                        "turns it. A shake that turns the phone more than this doesn't count. "
+                        "Motorola uses 108\u00b0. Measured on this phone: shakes 25 to 108\u00b0, "
+                        "twists 110 to 220\u00b0. 0: no check.")
+        twist.add(self.slider_row("Most it may turn", self.rotation, "{:.0f}\u00b0"))
 
         self.vibrate = Adw.SwitchRow(title="Vibrate", subtitle="Also when the phone is set to silent",
                                      active=self.get("vibrate"))
@@ -91,7 +106,7 @@ class Window(Adw.ApplicationWindow):
             vib.set_description(vib.get_description() + " (No vibrator found to try them on.)")
 
         page = Adw.PreferencesPage()
-        for g in (main, hard, vib):
+        for g in (main, hard, twist, vib):
             page.add(g)
         view = Adw.ToolbarView(content=page)
         view.add_top_bar(Adw.HeaderBar())
@@ -166,6 +181,8 @@ class Window(Adw.ApplicationWindow):
         kf = self.keyfile
         kf.set_boolean(GROUP, "enabled", self.enabled.get_active())
         kf.set_double(GROUP, "threshold", round(self.threshold.get_value(), 1))
+        kf.set_double(GROUP, "max-rotation", round(self.rotation.get_value()))
+        kf.set_boolean(GROUP, "notify", self.notify.get_active())
         kf.set_boolean(GROUP, "vibrate", self.vibrate.get_active())
         kf.set_integer(GROUP, "buzz-on-ms", int(self.on_ms.get_value()))
         kf.set_integer(GROUP, "buzz-second-ms", int(self.second_ms.get_value()))

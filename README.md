@@ -5,32 +5,19 @@ Shake the phone to switch the torch on or off, like Motorola's gesture. Two buzz
 ## How it works
 
 - **Motion:** both systems run sensorfwd. `shake-torch` asks it for an accelerometer session over D-Bus (`com.nokia.SensorService`, system bus) and reads the readings from `/run/sensord.sock`: 50 a second, in milli-g. The protocol is in the comment at the top of `shake-torch.c`. QtSensors isn't used: on FuriOS it has no sensorfw plugin.
-- **Shake:** a swing one way and back, like Motorola's chop. Gravity is the average of the last second; what's left is the movement. Within the last 0.6 s, the strongest movement must reach the threshold (1.4 g) and the movement back along the same line 60% of it, within 200 ms. In every recorded shake, gentle or hard, the swing back came 60 to 140 ms after the swing; setting the phone down on a table is also a swing and back, but slow (480 to 600 ms), and switched the torch before this limit. After switching it is ready again once the phone is calm (under 0.8 g for a quarter second, at least 0.8 s) or after 1.2 s at the latest. The calm rule alone missed the user's turn-off shake: the hand kept moving between on and off, as it does with the Motorola.
+- **Shake:** a swing one way and back, like Motorola's chop. Gravity is the average of the last second; what's left is the movement. Within the last 0.6 s, the strongest movement must reach the threshold (1.4 g) and the movement back along the same line 60% of it, within 200 ms. In every recorded shake, gentle or hard, the swing back came 60 to 140 ms after the swing; setting the phone down on a table is also a swing and back, but slow (480 to 600 ms), and switched the torch before this limit. After switching nothing happens for 1.7 s, the Motorola's quickest on-then-off in the user's hands. With a shorter wait the end of the same shake could switch it straight back off. Then it is ready once the phone is calm (under 0.8 g for a quarter second) or after 2 s at the latest. The calm rule alone missed the user's turn-off shake: the hand kept moving between on and off, as it does with the Motorola.
+- **Twists don't count:** like Motorola's `max_gyro_rotation`, the gyroscope (also through sensorfwd, where the phone has one) adds up how far the phone turned in the 350 ms before the swing. More than 108° is a flick of the wrist, not a chop, and is ignored. Measured on the FLX1s: accepted shakes turned 25 to 108°, rejected movements 110 to 224°. `max-rotation=0` turns the check off; without a gyroscope there is none.
 - **Torch:** FuriOS `io.furios.Flashlightd` (`SetBrightness`), Sailfish `org.sailfish.flashlight.provider` (`toggleFlashlight`). Whichever answers.
 - **Buzz:** through the Android vibrator device `/sys/class/leds/vibrator`, so it works in the "silent" profile too. Writable by the phone's user on both the FLX1s and the Jolla Phone (there through the `input` group). Phones without it get ngfd's `feedback_press` instead (untested).
-- **Off means off:** with shaking turned off in the settings, the service lets go of the accelerometer.
+- **Off means off:** with shaking turned off in the settings, the service lets go of the sensors.
+- **Notification:** while a shake has the torch on, "Flashlight is on / Tap to turn off the flashlight.", as on the Motorola. Tapping it turns the torch off; it goes away by itself when the torch is turned off another way. Standard desktop notifications (Phosh, and Sailfish's home screen, which also gets a D-Bus action `TorchOff`).
+- **Buzz pattern:** Motorola's by default: on is 200 ms, 100 ms pause, 400 ms; off is 300 ms.
 
 Tuned on a 100 s recording of the user's hand on the FLX1s (2026-11-10): walking peaked at 1.25 g, gentle shakes at 1.5 to 2 g, normal ones (a chop) at 4 to 10 g, in bursts of about half a second. Two earlier methods failed on it: counting three alternating swings merged fast swings into one, and "how far the total is from 1 g" barely moves when the phone is shaken sideways (a 2 g sideways shake reads 1.2 g). Replayed through the current method: 25 of 36 separate bursts switched (the rest followed another within a second), nothing while walking.
 
 ## How Motorola does it
 
-Full write-up, with the evidence and the commands to read it again: `../docs/motorola-chop.md`. In short, read on 2026-11-10 from the user's Motorola Edge 30 Pro (Android 14, Moto Actions 08.78.10) over adb, without root. The APK is kept privately in `../reference/moto-actions/` (proprietary, don't publish).
-
-- **Detection isn't in the app.** It runs in the Qualcomm sensor hub as a wake-up sensor, `ChopChop Wakeup` (type `com.motorola.sensor.chopchop`), sampled at 1 kHz with the main processor asleep. That's why it reacts at once with the screen off. The app, `com.motorola.actions` (FlashOnChop), only listens for the event (value 1.0), then switches the torch through Android's camera torch API and buzzes.
-- **Its parameters** are in `/vendor/etc/sensors/config/mot_chopchop.json`, readable by anyone. The names are Motorola's; the meanings are a reading of the names, since the firmware itself is closed:
-
-  | Parameter | Value | Likely meaning |
-  | --- | --- | --- |
-  | `first_accel_threshold` | 32.0 | first chop at least 32 m/s² (3.3 g) |
-  | `second_accel_threshold` | 30.0 | second chop at least 30 m/s² (3.1 g) |
-  | `max_chop_duration_ms` | 350 | each chop over within 350 ms |
-  | `max_gyro_rotation` | 108.0 | rejected if the phone turns faster than this (probably °/s): a twist of the wrist isn't a chop |
-  | `min_magnitude_percentage` | 0.2 | unclear; maybe how strong the opposite swing must be |
-  | `max_xy_percentage` | 0.65 | at most 65% of the movement across the phone's x/y plane, so the chop has to run mostly along one direction |
-
-  So it is "chop twice", as Motorola's own name `chop_twice` says, and it uses the gyroscope as well as the accelerometer. shake-torch uses only the accelerometer.
-- **Buzz**, from Android's vibration log (`dumpsys vibrator_manager`): torch on is 200 ms, 100 ms pause, 400 ms. Torch off is 300 ms. Both at full strength. The buzz starts 25 to 45 ms after the chop event.
-- **Between switches:** in the user's tests the quickest on-then-off pairs were 1.7 to 2.1 s apart. shake-torch allows a switch again after 1.2 s.
+Spec sheet: `../docs/motorola-chop.md`, read from the user's Motorola Edge 30 Pro on 2026-11-10. In short: the chop is recognised by the phone's sensor hub, not by the app, as "two chops" of about 3 g, each within 350 ms, with the gyroscope rejecting turns over 108. The app then switches the torch, buzzes (on: 200 ms, 100 ms pause, 400 ms; off: 300 ms) and shows "Flashlight is on, tap to turn off". shake-torch now copies the gyroscope check, the buzz, the notification and the 1.7 s between switches.
 
 ## Build and install
 
@@ -75,10 +62,13 @@ Underneath it's `~/.config/shake-torch.conf`, see `shake-torch.conf.example`. Af
 
 ## Status
 
-Works on the FLX1s (2026-11-10), checked by the user side by side with a Motorola: gentle and normal shakes switch it on and off, setting the phone on a table doesn't.
+- **FLX1s** (2026-11-10): works, checked by the user side by side with a Motorola: gentle and normal shakes switch it on and off, setting the phone on a table doesn't. The gyroscope check, the 1.7 s wait, Motorola's buzz and the notification are installed. The user found it good enough, with fine-tuning left for later.
+- **Jolla Phone, Sailfish 5.2:** package 0.3 installed and working with the screen on. With the screen off it reacts later and needs harder shakes, and the buzz waited for the torch. 0.3 buzzes first; the sleeping is still open. The Jolla's vibrator is stronger than the FLX1s's. Package 0.4 has the FLX1s changes; the notification on Sailfish is untested.
 
 Not done yet:
 
-- **Sailfish:** packaged (2026-11-10) but not yet tried on a phone. The D-Bus settings interface was tested in the container on a private bus; the QML page passed `qmllint` only. Open questions: whether Sailfish suspends with the screen off and so stops the sensor (the FLX1s never suspends), whether `org.sailfish.flashlight.provider` reports the new state from `toggleFlashlight`, and how the thresholds feel on the Jolla's accelerometer.
+- **Screen off on Sailfish:** measure with `--record` (it now records when each reading arrived), then decide between keeping the processor awake while the phone moves and accepting the delay.
+- **Twist limit:** 108° is Motorola's number. The FLX1s recording wasn't labelled shake by shake, so it isn't tuned to the user's twists yet.
+- **More of Motorola's checks,** if false triggers show up: direction (`max_xy_percentage`), and ignoring the phone in a pocket (proximity).
 - **Battery over hours** with the screen off is not measured; processor time is (see above).
 - A Codex review.

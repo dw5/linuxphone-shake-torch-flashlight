@@ -1,22 +1,29 @@
 # ~/.config/shake-torch.conf. After a change: systemctl --user reload shake-torch
 [shake-torch]
-# false: keep running but don't switch the torch
+# false: don't switch the torch, and let go of the sensors
 enabled=true
 # How hard the strongest swing must be, in g with gravity taken out; the swing back must
 # reach 60% of it. Lower is easier to trigger. Walking peaks at about 1.25.
 threshold=1.4
-# At least this long between two switches (it also waits for the phone to be calm).
-cooldown-ms=800
-# Keep the accelerometer on while the screen is off (sensorfwd's standby override).
-# FuriOS doesn't pause it anyway; Sailfish does. Costs battery; see README.md.
+# Ignore a shake that turned the phone more than this many degrees: a flick of the wrist
+# turns it, a chop doesn't. Motorola's limit (max_gyro_rotation). 0: no check. Needs a
+# gyroscope; without one there is no check.
+max-rotation=108
+# Nothing happens for this long after a switch, so the end of the same shake can't
+# switch it straight back. Then it waits for the phone to be calm, or 2 s at most.
+cooldown-ms=1700
+# Keep the sensors on while the screen is off (sensorfwd's standby override).
+# FuriOS doesn't pause them anyway; Sailfish does. Costs battery; see README.md.
 screen-off=true
+# While a shake has the torch on: a "Flashlight is on" notification; tap it to turn off.
+notify=true
 # Vibrate when the torch switches, also in the silent profile: torch on is two buzzes
-# with a pause between, torch off is one. Lengths in ms.
+# with a pause between, torch off is one. Lengths in ms. These are Motorola's.
 vibrate=true
-buzz-on-ms=250
-# The second "on" buzz; 0 or left out: as long as the first.
-buzz-second-ms=0
-buzz-gap-ms=50
-buzz-off-ms=275
+buzz-on-ms=200
+# The second "on" buzz; 0: as long as the first.
+buzz-second-ms=400
+buzz-gap-ms=100
+buzz-off-ms=300
 # Log every movement over 0.4 g to the journal, for tuning.
 log-movement=false
