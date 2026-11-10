@@ -236,8 +236,11 @@ static void vibrate(gboolean on)
  * Gravity is the average of the last second (a shake goes back and forth, so it averages
  * out); what's left is how the phone is being moved. A shake, like Motorola's chop, is a
  * hard swing one way and back again: within the last 0.6 s, the strongest movement is
- * over the threshold, and along the same line the other way there is at least 60% of
- * the threshold. A step or putting the phone down is mostly one way.
+ * over the threshold, and along the same line the other way, within 200 ms of it, there
+ * is at least 60% of the threshold. Measured: in every shake, gentle or hard, the swing
+ * back came 60 to 140 ms from the swing; moving the phone and setting it down on a table
+ * also go one way and back, but slowly (480 to 600 ms), and switched the torch before
+ * this limit.
  * After switching it is ready again once the phone is calm (under 0.8 g for 0.25 s, and
  * at least cooldown-ms) or after 1.2 s at the latest: a hand that keeps moving between
  * "on" and "off" never calms down, and the user expects the second shake to work, as on
@@ -250,6 +253,7 @@ static void vibrate(gboolean on)
 #define GRAVITY_US 1000000
 #define SWING_US 600000
 #define BACK 0.6
+#define BACK_US 200000  /* the swing back must come this soon before or after */
 #define CALM_G 0.8
 #define CALM_US 250000
 #define REARM_US 1200000  /* ready again after this, calm or not */
@@ -362,9 +366,12 @@ static void on_reading(guint64 t, double x, double y, double z)
         return;
     double ux = app.mov[best].x / peak, uy = app.mov[best].y / peak, uz = app.mov[best].z / peak;
     double back = 0;
+    guint64 at = app.mov[best].t;
     for (int i = 0; i < app.mn; i++) {
         int k = (app.mfirst + i) % WINDOW_MAX;
-        back = MAX(back, -(app.mov[k].x * ux + app.mov[k].y * uy + app.mov[k].z * uz));
+        guint64 dt = app.mov[k].t > at ? app.mov[k].t - at : at - app.mov[k].t;
+        if (dt <= BACK_US)
+            back = MAX(back, -(app.mov[k].x * ux + app.mov[k].y * uy + app.mov[k].z * uz));
     }
     if (back >= app.threshold_g * BACK)
         shaken(t);
