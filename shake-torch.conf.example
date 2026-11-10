@@ -1,0 +1,18 @@
+# ~/.config/shake-torch.conf. After a change: systemctl --user reload shake-torch
+[shake-torch]
+# false: keep running but don't switch the torch
+enabled=true
+# How far from 1 g a reading must be to count as shaking. Lower is easier to trigger.
+threshold=1.0
+# How long the shaking must last, and what share of the readings in that time must be
+# over the threshold.
+shake-ms=500
+share=0.5
+# After switching, ignore movement this long.
+cooldown-ms=1500
+# Keep the accelerometer on while the screen is off. Costs battery; see README.md.
+screen-off=false
+# A short vibration when the torch switches.
+vibrate=true
+# Log every movement over 0.4 g to the journal, for tuning.
+log-movement=false
