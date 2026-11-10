@@ -11,6 +11,7 @@ License:    Personal use
 Requires:   sensorfw-qt5
 Requires:   nemo-qml-plugin-dbus-qt5
 Requires:   jolla-settings
+Requires:   libsailfishapp-launcher
 
 %description
 Shake the phone to switch the torch on or off, with two buzzes for on and one for off,
@@ -22,7 +23,8 @@ install -Dm644 %{_sourcedir}/shake-torch.service %{buildroot}%{_userunitdir}/sha
 mkdir -p %{buildroot}%{_userunitdir}/user-session.target.wants
 ln -s ../shake-torch.service %{buildroot}%{_userunitdir}/user-session.target.wants/shake-torch.service
 install -Dm644 %{_sourcedir}/shake-torch.json %{buildroot}%{_datadir}/jolla-settings/entries/shake-torch.json
-install -Dm644 %{_sourcedir}/shake-torch.qml %{buildroot}%{_datadir}/jolla-settings/pages/shake-torch/shake-torch.qml
+install -Dm644 %{_sourcedir}/ShakeTorchPage.qml %{buildroot}%{_datadir}/shake-torch/qml/ShakeTorchPage.qml
+install -Dm644 %{_sourcedir}/shake-torch-app.qml %{buildroot}%{_datadir}/shake-torch/qml/shake-torch.qml
 install -Dm644 %{_sourcedir}/ShakeTorchSwitch.qml %{buildroot}%{_datadir}/jolla-settings/pages/shake-torch/ShakeTorchSwitch.qml
 install -Dm644 %{_sourcedir}/shake-torch.desktop %{buildroot}%{_datadir}/applications/shake-torch.desktop
 for size in 86 108 128 172; do
@@ -48,5 +50,6 @@ systemctl-user daemon-reload || :
 %{_userunitdir}/user-session.target.wants/shake-torch.service
 %{_datadir}/jolla-settings/entries/shake-torch.json
 %{_datadir}/jolla-settings/pages/shake-torch
+%{_datadir}/shake-torch
 %{_datadir}/applications/shake-torch.desktop
 %{_datadir}/icons/hicolor/*/apps/shake-torch.png

@@ -7,7 +7,7 @@
             "icon": "image://theme/icon-m-gesture",
             "order": 281,
             "params": {
-                "source": "/usr/share/jolla-settings/pages/shake-torch/shake-torch.qml"
+                "source": "/usr/share/shake-torch/qml/ShakeTorchPage.qml"
             }
         },
         {
