@@ -23,6 +23,20 @@ mkdir -p %{buildroot}%{_userunitdir}/user-session.target.wants
 ln -s ../shake-torch.service %{buildroot}%{_userunitdir}/user-session.target.wants/shake-torch.service
 install -Dm644 %{_sourcedir}/shake-torch.json %{buildroot}%{_datadir}/jolla-settings/entries/shake-torch.json
 install -Dm644 %{_sourcedir}/shake-torch.qml %{buildroot}%{_datadir}/jolla-settings/pages/shake-torch/shake-torch.qml
+install -Dm644 %{_sourcedir}/ShakeTorchSwitch.qml %{buildroot}%{_datadir}/jolla-settings/pages/shake-torch/ShakeTorchSwitch.qml
+
+%post
+# Pick up the new program in running sessions (systemctl-user is Sailfish's helper for this).
+systemctl-user daemon-reload || :
+systemctl-user try-restart shake-torch.service || :
+
+%preun
+if [ "$1" -eq 0 ]; then
+    systemctl-user stop shake-torch.service || :
+fi
+
+%postun
+systemctl-user daemon-reload || :
 
 %files
 %{_bindir}/shake-torch

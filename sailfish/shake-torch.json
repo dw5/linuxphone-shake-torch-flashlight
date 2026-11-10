@@ -9,6 +9,16 @@
             "params": {
                 "source": "/usr/share/jolla-settings/pages/shake-torch/shake-torch.qml"
             }
+        },
+        {
+            "path": "system_settings/look_and_feel/shake_torch/enable_switch",
+            "title": "Shake for torch",
+            "type": "custom",
+            "icon": "image://theme/icon-m-flashlight",
+            "params": {
+                "source": "/usr/share/jolla-settings/pages/shake-torch/ShakeTorchSwitch.qml",
+                "type": "grid"
+            }
         }
     ]
 }

@@ -13,12 +13,12 @@ shake-torch: shake-torch.c
 
 # Sailfish OS package (aarch64, for the Jolla Phone): the same binary, plus a user
 # service and a page in the Settings app. Needs rpm in the container.
-VERSION = 0.4
+VERSION = 0.5
 RPMDIR = $(CURDIR)/rpm
-rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml
+rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml sailfish/ShakeTorchSwitch.qml
 	rm -rf $(RPMDIR) && mkdir -p $(RPMDIR)/SOURCES
 	$(CROSS)strip -o $(RPMDIR)/SOURCES/shake-torch shake-torch
-	cp sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml $(RPMDIR)/SOURCES/
+	cp sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml sailfish/ShakeTorchSwitch.qml $(RPMDIR)/SOURCES/
 	rpmbuild -bb --target aarch64 --define '_topdir $(RPMDIR)' --define '_userunitdir /usr/lib/systemd/user' \
 		--define 'version $(VERSION)' --define '_bindir /usr/bin' --define '_datadir /usr/share' \
 		sailfish/shake-torch.spec
