@@ -11,6 +11,20 @@ LDLIBS += $(shell PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) pkg-config --libs $(PKG
 shake-torch: shake-torch.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
+# Sailfish OS package (aarch64, for the Jolla Phone): the same binary, plus a user
+# service and a page in the Settings app. Needs rpm in the container.
+VERSION = 0.2
+RPMDIR = $(CURDIR)/rpm
+rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml
+	rm -rf $(RPMDIR) && mkdir -p $(RPMDIR)/SOURCES
+	$(CROSS)strip -o $(RPMDIR)/SOURCES/shake-torch shake-torch
+	cp sailfish/shake-torch.service sailfish/shake-torch.json sailfish/shake-torch.qml $(RPMDIR)/SOURCES/
+	rpmbuild -bb --target aarch64 --define '_topdir $(RPMDIR)' --define '_userunitdir /usr/lib/systemd/user' \
+		--define 'version $(VERSION)' --define '_bindir /usr/bin' --define '_datadir /usr/share' \
+		sailfish/shake-torch.spec
+	mv $(RPMDIR)/RPMS/aarch64/*.rpm . && rm -rf $(RPMDIR)
+
 clean:
-	rm -f shake-torch
+	rm -f shake-torch *.rpm
+.PHONY: clean rpm
 .PHONY: clean

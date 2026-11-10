@@ -7,11 +7,14 @@ Shake the phone to switch the torch on or off, like Motorola's gesture. Two buzz
 - **Motion:** both systems run sensorfwd. `shake-torch` asks it for an accelerometer session over D-Bus (`com.nokia.SensorService`, system bus) and reads the readings from `/run/sensord.sock`: 50 a second, in milli-g. The protocol is in the comment at the top of `shake-torch.c`. QtSensors isn't used: on FuriOS it has no sensorfw plugin.
 - **Shake:** a swing one way and back, like Motorola's chop. Gravity is the average of the last second; what's left is the movement. Within the last 0.6 s, the strongest movement must reach the threshold (1.4 g) and the movement back along the same line 60% of it, within 200 ms. In every recorded shake, gentle or hard, the swing back came 60 to 140 ms after the swing; setting the phone down on a table is also a swing and back, but slow (480 to 600 ms), and switched the torch before this limit. After switching it is ready again once the phone is calm (under 0.8 g for a quarter second, at least 0.8 s) or after 1.2 s at the latest. The calm rule alone missed the user's turn-off shake: the hand kept moving between on and off, as it does with the Motorola.
 - **Torch:** FuriOS `io.furios.Flashlightd` (`SetBrightness`), Sailfish `org.sailfish.flashlight.provider` (`toggleFlashlight`). Whichever answers.
-- **Buzz:** on FuriOS through the vibrator device `/sys/class/leds/vibrator` (writable by the phone's user), so it works in feedbackd's "silent" profile too. On Sailfish through ngfd (untested).
+- **Buzz:** through the Android vibrator device `/sys/class/leds/vibrator`, so it works in the "silent" profile too. Writable by the phone's user on both the FLX1s and the Jolla Phone (there through the `input` group). Phones without it get ngfd's `feedback_press` instead (untested).
+- **Off means off:** with shaking turned off in the settings, the service lets go of the accelerometer.
 
 Tuned on a 100 s recording of the user's hand on the FLX1s (2026-11-10): walking peaked at 1.25 g, gentle shakes at 1.5 to 2 g, normal ones (a chop) at 4 to 10 g, in bursts of about half a second. Two earlier methods failed on it: counting three alternating swings merged fast swings into one, and "how far the total is from 1 g" barely moves when the phone is shaken sideways (a 2 g sideways shake reads 1.2 g). Replayed through the current method: 25 of 36 separate bursts switched (the rest followed another within a second), nothing while walking.
 
 ## Build and install
+
+### FuriOS
 
 Built in the `furilabs` container (cross compiler and `libglib2.0-dev:arm64`):
 
@@ -23,9 +26,23 @@ Then on the phone, with `shake-torch`, `shake-torch-settings`, `shake-torch.serv
 
 Remove: `systemctl --user disable --now shake-torch`, then delete `~/.local/bin/shake-torch*`, `~/.config/systemd/user/shake-torch.service`, `~/.local/share/applications/local.ShakeTorch.desktop` and `~/.local/share/icons/hicolor/scalable/apps/shake-torch.svg`.
 
+### Sailfish OS
+
+The same arm64 binary runs on the Jolla Phone: Sailfish 5.2 has glibc 2.41 and GLib 2.86, and the binary needs glibc 2.34 and GLib 2.84 at most. It is packaged as an RPM with a user service and a page in the Settings app:
+
+```
+ws run -- make rpm      # shake-torch-0.2-1.aarch64.rpm (needs rpm in the container)
+```
+
+On the phone, as root (`devel-su`): `pkcon install-local shake-torch-0.2-1.aarch64.rpm`, or `rpm -U` it. Then, as the phone's user, start it without a reboot: `systemctl --user daemon-reload; systemctl --user start shake-torch`. It starts with the phone after that (the package links it into `user-session.target`).
+
+The settings page is **Settings > System > Shake for torch**, under Gestures (`sailfish/shake-torch.qml`). QML there can't write files or the vibrator, so the page talks to the service over D-Bus: `local.ShakeTorch` on the session bus, with `GetSettings`, `Set(key, value)` and `TryBuzz` (see the comment in `shake-torch.c`). If the service isn't running the page says so and offers **Start**.
+
+Remove: `devel-su rpm -e shake-torch`, then `systemctl --user stop shake-torch`.
+
 ## Settings
 
-The **Shake Torch** app (`shake-torch-settings`, GTK, FuriOS): on or off, how hard to shake, and the buzz lengths, with **Try torch on** / **Try torch off** buttons to feel them first. Changes save at once and the service rereads them.
+On FuriOS, the **Shake Torch** app (`shake-torch-settings`, GTK): on or off, how hard to shake, and the buzz lengths, with **Try torch on** / **Try torch off** buttons to feel them first. Changes save at once and the service rereads them.
 
 Underneath it's `~/.config/shake-torch.conf`, see `shake-torch.conf.example`. After editing by hand: `systemctl --user reload shake-torch`.
 
@@ -42,6 +59,6 @@ Works on the FLX1s (2026-11-10), checked by the user side by side with a Motorol
 
 Not done yet:
 
-- **Sailfish:** not built yet. Needs a build against Sailfish's GLib (the Sailfish SDK, or the phone's copied root filesystem as a sysroot), and a QML settings page.
+- **Sailfish:** packaged (2026-11-10) but not yet tried on a phone. The D-Bus settings interface was tested in the container on a private bus; the QML page passed `qmllint` only. Open questions: whether Sailfish suspends with the screen off and so stops the sensor (the FLX1s never suspends), whether `org.sailfish.flashlight.provider` reports the new state from `toggleFlashlight`, and how the thresholds feel on the Jolla's accelerometer.
 - **Battery over hours** with the screen off is not measured; processor time is (see above).
 - A Codex review.

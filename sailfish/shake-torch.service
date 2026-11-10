@@ -1,0 +1,12 @@
+[Unit]
+Description=Shake the phone to switch the torch
+After=pre-user-session.target dbus.socket
+
+[Service]
+ExecStart=/usr/bin/shake-torch
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=user-session.target

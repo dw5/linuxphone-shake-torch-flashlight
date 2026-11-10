@@ -15,7 +15,8 @@
  *        shake-torch --record FILE   also save every reading to FILE, to tune later
  *        shake-torch --replay FILE   run the detector over a recording; no torch
  *        shake-torch --toggle        switch the torch once and exit
- * Settings: ~/.config/shake-torch.conf, reread on SIGHUP (see README.md).
+ * Settings: ~/.config/shake-torch.conf, reread on SIGHUP (see README.md), and over
+ * D-Bus while running (local.ShakeTorch, for the Sailfish settings page).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -60,6 +61,7 @@ typedef struct {
     GMainLoop *loop;
     GDBusConnection *system, *session;
     guint watch, retry;
+    gboolean sensor_up;   /* sensorfwd is on the bus */
 
     /* the sensor session */
     int sid;
@@ -183,10 +185,11 @@ static int toggle_torch(void)
 /* Buzz twice for on, once for off, so it can be told without looking. Always, also
  * in the silent profile: the user asked for that.
  *
- * FuriOS and other hybris phones: the Android vibrator as an LED class device
- * (duration in ms, then activate), writable by the phone's user. This plays whatever
- * the feedback profile is: feedbackd's "silent" profile would swallow it, and its
- * button events are a 7 ms tick. Elsewhere (Sailfish): ngfd. */
+ * Hybris phones (the FLX1s on FuriOS, the Jolla Phone on Sailfish): the Android
+ * vibrator as an LED class device (duration in ms, then activate), writable by the
+ * phone's user (on the Jolla through the "input" group). This plays whatever the
+ * feedback profile is: feedbackd's "silent" profile would swallow it, and its button
+ * events are a 7 ms tick. Without one: ngfd, Sailfish's feedback daemon. */
 #define VIBRATOR "/sys/class/leds/vibrator"
 
 /* A plain write: g_file_set_contents() writes a temporary file and renames it, which a
@@ -210,16 +213,14 @@ static gboolean buzz_sysfs(gpointer ms)
     return G_SOURCE_REMOVE;
 }
 
-static void vibrate(gboolean on)
+static void buzz_pattern(gboolean on, int on_ms, int gap_ms, int off_ms)
 {
-    if (!app.vibrate)
-        return;
     if (access(VIBRATOR "/activate", W_OK) == 0) {
         if (on) {
-            buzz_sysfs(GINT_TO_POINTER(app.buzz_on_ms));
-            g_timeout_add(app.buzz_on_ms + app.buzz_gap_ms, buzz_sysfs, GINT_TO_POINTER(app.buzz_on_ms));
+            buzz_sysfs(GINT_TO_POINTER(on_ms));
+            g_timeout_add(on_ms + gap_ms, buzz_sysfs, GINT_TO_POINTER(on_ms));
         } else {
-            buzz_sysfs(GINT_TO_POINTER(app.buzz_off_ms));
+            buzz_sysfs(GINT_TO_POINTER(off_ms));
         }
         return;
     }
@@ -229,6 +230,12 @@ static void vibrate(gboolean on)
                            "/com/nokia/NonGraphicFeedback1", "com.nokia.NonGraphicFeedback1",
                            "Play", g_variant_new("(sa{sv})", "feedback_press", &props),
                            NULL, G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL, NULL);
+}
+
+static void vibrate(gboolean on)
+{
+    if (app.vibrate)
+        buzz_pattern(on, app.buzz_on_ms, app.buzz_gap_ms, app.buzz_off_ms);
 }
 
 /* Shake detection
@@ -382,10 +389,16 @@ static void on_reading(guint64 t, double x, double y, double z)
 static void stop_sensor(void);
 static void start_sensor(void);
 
+/* Shaking turned off: let go of the accelerometer, unless tuning. */
+static gboolean wants_sensor(void)
+{
+    return app.enabled || app.monitor || app.record;
+}
+
 static gboolean retry_sensor(gpointer _)
 {
     app.retry = 0;
-    if (app.sid < 0)
+    if (app.sid < 0 && app.sensor_up && wants_sensor())
         start_sensor();
     return G_SOURCE_REMOVE;
 }
@@ -527,12 +540,15 @@ static void stop_sensor(void)
 
 static void sensor_appeared(GDBusConnection *c, const char *name, const char *owner, gpointer _)
 {
+    app.sensor_up = TRUE;
     stop_sensor();
-    start_sensor();
+    if (wants_sensor())
+        start_sensor();
 }
 
 static void sensor_vanished(GDBusConnection *c, const char *name, gpointer _)
 {
+    app.sensor_up = FALSE;
     if (app.sid >= 0)
         g_message("sensorfwd went away; waiting for it to come back");
     if (app.fd_source)
@@ -555,11 +571,126 @@ static gboolean on_reload(gpointer _)
     gboolean screen_off = app.screen_off;
     load_settings();
     g_message("Settings reloaded (swings of %.2f g)", app.threshold_g);
-    if (app.sid >= 0 && screen_off != app.screen_off) {
+    if (app.sid >= 0 && (!wants_sensor() || screen_off != app.screen_off)) {
         stop_sensor();
-        start_sensor();
+        if (!wants_sensor())
+            g_message("Shaking turned off; accelerometer released");
     }
+    if (app.sid < 0 && app.sensor_up && wants_sensor())
+        start_sensor();
     return G_SOURCE_CONTINUE;
+}
+
+/* Settings over D-Bus, for the Sailfish settings page: QML there can't write files or
+ * the vibrator. Session bus, local.ShakeTorch at /local/ShakeTorch.
+ *   GetSettings() -> a{sv}            the current settings, and "running"
+ *   Set(s key, s value)               change one setting; saved to the config file
+ *   TryBuzz(b on, i on, i gap, i off) buzz once as for torch on or off, with these lengths */
+#define BUS_NAME "local.ShakeTorch"
+#define BUS_PATH "/local/ShakeTorch"
+
+static const char introspection[] =
+    "<node><interface name='" BUS_NAME "'>"
+    "<method name='GetSettings'><arg type='a{sv}' direction='out'/></method>"
+    "<method name='Set'><arg type='s' name='key' direction='in'/>"
+    "<arg type='s' name='value' direction='in'/></method>"
+    "<method name='TryBuzz'><arg type='b' name='on' direction='in'/>"
+    "<arg type='i' name='on_ms' direction='in'/><arg type='i' name='gap_ms' direction='in'/>"
+    "<arg type='i' name='off_ms' direction='in'/></method>"
+    "</interface></node>";
+
+static const struct { const char *key; char type; } setting_keys[] = {
+    { "enabled", 'b' }, { "threshold", 'd' }, { "cooldown-ms", 'i' }, { "screen-off", 'b' },
+    { "vibrate", 'b' }, { "buzz-on-ms", 'i' }, { "buzz-gap-ms", 'i' }, { "buzz-off-ms", 'i' },
+    { "log-movement", 'b' },
+};
+
+/* Check the value and write it in the config file's form; FALSE if it isn't valid. */
+static gboolean save_setting(const char *key, const char *value, GError **error)
+{
+    char type = 0;
+    for (guint i = 0; i < G_N_ELEMENTS(setting_keys); i++)
+        if (g_str_equal(key, setting_keys[i].key))
+            type = setting_keys[i].type;
+    if (!type) {
+        g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS, "Unknown setting %s", key);
+        return FALSE;
+    }
+    char num[G_ASCII_DTOSTR_BUF_SIZE];
+    const char *out = NULL;
+    if (type == 'b') {
+        if (g_str_equal(value, "true") || g_str_equal(value, "false"))
+            out = value;
+    } else if (type == 'i') {
+        gint64 v;
+        if (g_ascii_string_to_signed(value, 10, 0, 100000, &v, NULL))
+            out = value;
+    } else {
+        char *end;
+        double v = g_ascii_strtod(value, &end);
+        if (*value && !*end && isfinite(v))
+            out = g_ascii_formatd(num, sizeof num, "%.6g", v);
+    }
+    if (!out) {
+        g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS, "Bad value for %s: %s", key, value);
+        return FALSE;
+    }
+    g_autofree char *path = config_path();
+    g_autoptr(GKeyFile) kf = g_key_file_new();
+    g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_value(kf, "shake-torch", key, out);
+    g_autofree char *dir = g_path_get_dirname(path);
+    g_mkdir_with_parents(dir, 0700);
+    return g_key_file_save_to_file(kf, path, error);
+}
+
+static void on_method(GDBusConnection *c, const char *sender, const char *path, const char *iface,
+                      const char *method, GVariant *args, GDBusMethodInvocation *inv, gpointer _)
+{
+    if (g_str_equal(method, "GetSettings")) {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+        g_variant_builder_add(&b, "{sv}", "enabled", g_variant_new_boolean(app.enabled));
+        g_variant_builder_add(&b, "{sv}", "threshold", g_variant_new_double(app.threshold_g));
+        g_variant_builder_add(&b, "{sv}", "cooldown-ms", g_variant_new_int32(app.cooldown_ms));
+        g_variant_builder_add(&b, "{sv}", "screen-off", g_variant_new_boolean(app.screen_off));
+        g_variant_builder_add(&b, "{sv}", "vibrate", g_variant_new_boolean(app.vibrate));
+        g_variant_builder_add(&b, "{sv}", "buzz-on-ms", g_variant_new_int32(app.buzz_on_ms));
+        g_variant_builder_add(&b, "{sv}", "buzz-gap-ms", g_variant_new_int32(app.buzz_gap_ms));
+        g_variant_builder_add(&b, "{sv}", "buzz-off-ms", g_variant_new_int32(app.buzz_off_ms));
+        g_variant_builder_add(&b, "{sv}", "running", g_variant_new_boolean(app.sid >= 0));
+        g_dbus_method_invocation_return_value(inv, g_variant_new("(a{sv})", &b));
+    } else if (g_str_equal(method, "Set")) {
+        const char *key, *value;
+        g_variant_get(args, "(&s&s)", &key, &value);
+        GError *e = NULL;
+        if (!save_setting(key, value, &e)) {
+            g_dbus_method_invocation_take_error(inv, e);
+            return;
+        }
+        on_reload(NULL);
+        g_dbus_method_invocation_return_value(inv, NULL);
+    } else if (g_str_equal(method, "TryBuzz")) {
+        gboolean on;
+        gint32 on_ms, gap_ms, off_ms;
+        g_variant_get(args, "(biii)", &on, &on_ms, &gap_ms, &off_ms);
+        buzz_pattern(on, CLAMP(on_ms, 10, 2000), CLAMP(gap_ms, 50, 2000), CLAMP(off_ms, 10, 2000));
+        g_dbus_method_invocation_return_value(inv, NULL);
+    }
+}
+
+static void export_settings(void)
+{
+    static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { 0 } };
+    g_autoptr(GError) e = NULL;
+    g_autoptr(GDBusNodeInfo) node = g_dbus_node_info_new_for_xml(introspection, NULL);
+    if (!g_dbus_connection_register_object(app.session, BUS_PATH, node->interfaces[0], &vtable,
+                                           NULL, NULL, &e)) {
+        g_warning("Can't offer settings over D-Bus: %s", e->message);
+        return;
+    }
+    g_bus_own_name_on_connection(app.session, BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE,
+                                 NULL, NULL, NULL, NULL);
 }
 
 static int replay(const char *path)
@@ -647,6 +778,8 @@ int main(int argc, char **argv)
     }
 
     app.loop = g_main_loop_new(NULL, FALSE);
+    if (!app.monitor && !app.record)
+        export_settings();
     g_unix_signal_add(SIGINT, on_quit, NULL);
     g_unix_signal_add(SIGTERM, on_quit, NULL);
     g_unix_signal_add(SIGHUP, on_reload, NULL);
