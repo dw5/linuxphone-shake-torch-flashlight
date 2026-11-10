@@ -14,7 +14,7 @@ Tuned on a 100 s recording of the user's hand on the FLX1s (2026-11-10): walking
 
 ## How Motorola does it
 
-Read on 2026-11-10 from the user's Motorola Edge 30 Pro (Android 14, Moto Actions 08.78.10) over adb, without root. The APK is kept privately in `../reference/moto-actions/` (proprietary, don't publish).
+Full write-up, with the evidence and the commands to read it again: `../docs/motorola-chop.md`. In short, read on 2026-11-10 from the user's Motorola Edge 30 Pro (Android 14, Moto Actions 08.78.10) over adb, without root. The APK is kept privately in `../reference/moto-actions/` (proprietary, don't publish).
 
 - **Detection isn't in the app.** It runs in the Qualcomm sensor hub as a wake-up sensor, `ChopChop Wakeup` (type `com.motorola.sensor.chopchop`), sampled at 1 kHz with the main processor asleep. That's why it reacts at once with the screen off. The app, `com.motorola.actions` (FlashOnChop), only listens for the event (value 1.0), then switches the torch through Android's camera torch API and buzzes.
 - **Its parameters** are in `/vendor/etc/sensors/config/mot_chopchop.json`, readable by anyone. The names are Motorola's; the meanings are a reading of the names, since the firmware itself is closed:
