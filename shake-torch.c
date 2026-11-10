@@ -75,7 +75,7 @@ typedef struct {
     struct { guint64 t; double x, y, z, m; } mov[WINDOW_MAX]; /* last 0.6 s: movement */
     int mn, mfirst;
     gboolean armed;
-    guint64 calm_since, quiet_until;
+    guint64 calm_since, quiet_until, switched_at;
     double bump;          /* strongest movement in the current bump (log-movement) */
     guint64 last_print;
     double print_max;
@@ -238,8 +238,10 @@ static void vibrate(gboolean on)
  * hard swing one way and back again: within the last 0.6 s, the strongest movement is
  * over the threshold, and along the same line the other way there is at least 60% of
  * the threshold. A step or putting the phone down is mostly one way.
- * After switching it waits until the phone is calm (under 0.8 g for 0.25 s), and at
- * least cooldown-ms, so one long shake doesn't switch it on and off.
+ * After switching it is ready again once the phone is calm (under 0.8 g for 0.25 s, and
+ * at least cooldown-ms) or after 1.2 s at the latest: a hand that keeps moving between
+ * "on" and "off" never calms down, and the user expects the second shake to work, as on
+ * the Motorola. A long shake can then switch it at most every 1.2 s.
  *
  * Tuned on a recording from the FLX1s (2026-11-10, user's hand): walking peaked at
  * 1.25 g, gentle shakes at 1.5 to 2 g, normal ones at 4 to 10 g. At 1.4 g it caught 28
@@ -250,6 +252,7 @@ static void vibrate(gboolean on)
 #define BACK 0.6
 #define CALM_G 0.8
 #define CALM_US 250000
+#define REARM_US 1200000  /* ready again after this, calm or not */
 
 static void reset_detector(void)
 {
@@ -264,6 +267,7 @@ static void shaken(guint64 t)
 {
     app.armed = FALSE;
     app.calm_since = 0;
+    app.switched_at = t;
     app.quiet_until = t + (guint64)app.cooldown_ms * 1000;
     if (app.replay) {
         g_print("%8.2f s  SHAKE\n", t / 1e6);
@@ -330,7 +334,8 @@ static void on_reading(guint64 t, double x, double y, double z)
             app.calm_since = 0;
         else if (!app.calm_since)
             app.calm_since = t;
-        if (app.calm_since && t - app.calm_since >= CALM_US && t >= app.quiet_until) {
+        gboolean calm = app.calm_since && t - app.calm_since >= CALM_US && t >= app.quiet_until;
+        if (calm || t - app.switched_at >= REARM_US) {
             app.armed = TRUE;
             app.mn = app.mfirst = 0;
         }
