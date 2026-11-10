@@ -65,7 +65,7 @@ Underneath it's `~/.config/shake-torch.conf`, see `shake-torch.conf.example`. Af
 ## Status
 
 - **FLX1s** (2026-11-10): works, checked by the user side by side with a Motorola: gentle and normal shakes switch it on and off, setting the phone on a table doesn't. The gyroscope check, the 1.7 s wait, Motorola's buzz and the notification are installed. The user found it good enough, with fine-tuning left for later.
-- **Jolla Phone, Sailfish 5.2:** package 0.3 installed and working with the screen on. With the screen off it reacts later and needs harder shakes, and the buzz waited for the torch. 0.3 buzzes first; the sleeping is still open. The Jolla's vibrator is stronger than the FLX1s's. Package 0.4 has the FLX1s changes; the notification on Sailfish is untested.
+- **Jolla Phone, Sailfish 5.2:** package 0.7 installed and working (2026-11-10): shaking with the screen on, the Shake Torch app, the Settings page and the Top menu toggle, confirmed by the user. With the screen off it reacts later and needs harder shakes, because Sailfish sleeps. The Jolla's vibrator is stronger than the FLX1s's.
 
 Not done yet:
 
