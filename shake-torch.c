@@ -356,7 +356,7 @@ static void show_notification(void)
     g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
     g_variant_builder_add(&hints, "{sv}", "urgency", g_variant_new_byte(1));
     g_variant_builder_add(&hints, "{sv}", "category", g_variant_new_string("device"));
-    g_variant_builder_add(&hints, "{sv}", "desktop-entry", g_variant_new_string("local.ShakeTorch"));
+    g_variant_builder_add(&hints, "{sv}", "desktop-entry", g_variant_new_string("local.ShakeTorch.Settings"));
     g_variant_builder_add(&hints, "{sv}", "x-nemo-icon", g_variant_new_string("icon-m-flashlight"));
     g_variant_builder_add(&hints, "{sv}", "x-nemo-remote-action-default",
                           g_variant_new_string("local.ShakeTorch /local/ShakeTorch local.ShakeTorch TorchOff"));

@@ -8,8 +8,10 @@ install -D -m 644 shake-torch.service ~/.config/systemd/user/shake-torch.service
 install -D -m 755 shake-torch-settings ~/.local/bin/shake-torch-settings
 # The session may not have ~/.local/bin on PATH, so point at the installed copy.
 mkdir -p ~/.local/share/applications
-sed "s|^Exec=.*|Exec=$HOME/.local/bin/shake-torch-settings|" local.ShakeTorch.desktop \
-    > ~/.local/share/applications/local.ShakeTorch.desktop
+sed "s|^Exec=.*|Exec=$HOME/.local/bin/shake-torch-settings|" local.ShakeTorch.Settings.desktop \
+    > ~/.local/share/applications/local.ShakeTorch.Settings.desktop
+# Before 0.4 the app was local.ShakeTorch, now the service's D-Bus name.
+rm -f ~/.local/share/applications/local.ShakeTorch.desktop
 install -D -m 644 shake-torch.svg ~/.local/share/icons/hicolor/scalable/apps/shake-torch.svg
 gtk-update-icon-cache -q ~/.local/share/icons/hicolor 2>/dev/null || true
 update-desktop-database -q ~/.local/share/applications 2>/dev/null || true

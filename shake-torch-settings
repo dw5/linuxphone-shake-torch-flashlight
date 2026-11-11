@@ -220,7 +220,8 @@ class Window(Adw.ApplicationWindow):
 
 class App(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="local.ShakeTorch")
+        # Not local.ShakeTorch: that's the service's own D-Bus name.
+        super().__init__(application_id="local.ShakeTorch.Settings")
 
     def do_activate(self):
         (self.props.active_window or Window(self)).present()

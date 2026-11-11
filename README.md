@@ -29,9 +29,9 @@ Built in the `furilabs` container (cross compiler and `libglib2.0-dev:arm64`):
 ws run -- make          # in this folder: an arm64 binary for FuriOS
 ```
 
-Then on the phone, with `shake-torch`, `shake-torch-settings`, `shake-torch.service`, `local.ShakeTorch.desktop`, `shake-torch.svg` and `install.sh` copied over: `sh install.sh`. It puts the programs in `~/.local/bin`, adds the app to the app list, and runs the service as a user service that starts with the phone. No root.
+Then on the phone, with `shake-torch`, `shake-torch-settings`, `shake-torch.service`, `local.ShakeTorch.Settings.desktop`, `shake-torch.svg` and `install.sh` copied over: `sh install.sh`. It puts the programs in `~/.local/bin`, adds the app to the app list, and runs the service as a user service that starts with the phone. No root.
 
-Remove: `systemctl --user disable --now shake-torch`, then delete `~/.local/bin/shake-torch*`, `~/.config/systemd/user/shake-torch.service`, `~/.local/share/applications/local.ShakeTorch.desktop` and `~/.local/share/icons/hicolor/scalable/apps/shake-torch.svg`.
+Remove: `systemctl --user disable --now shake-torch`, then delete `~/.local/bin/shake-torch*`, `~/.config/systemd/user/shake-torch.service`, `~/.local/share/applications/local.ShakeTorch.Settings.desktop` and `~/.local/share/icons/hicolor/scalable/apps/shake-torch.svg`.
 
 ### Sailfish OS
 
