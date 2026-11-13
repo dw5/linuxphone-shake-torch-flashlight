@@ -4,17 +4,17 @@ CROSS ?= aarch64-linux-gnu-
 CC = $(CROSS)gcc
 PKG_CONFIG_LIBDIR ?= /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 PKGS = gio-unix-2.0
+VERSION = 0.8
 CFLAGS ?= -O2 -g
-CFLAGS += -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(shell PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) pkg-config --cflags $(PKGS))
+CFLAGS += -DVERSION='"$(VERSION)"' -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(shell PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) pkg-config --cflags $(PKGS))
 LDLIBS += $(shell PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) pkg-config --libs $(PKGS)) -lm
 
-shake-torch: shake-torch.c
+shake-torch: shake-torch.c Makefile
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 # Sailfish OS package (aarch64, for the Jolla Phone): the same binary, plus a user
 # service, a page in the Settings app, a Top menu toggle and an app grid icon that opens
 # the page. Needs rpm and rsvg-convert (librsvg2-bin) in the container.
-VERSION = 0.7
 RPMDIR = $(CURDIR)/rpm
 rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish/shake-torch.json sailfish/ShakeTorchPage.qml sailfish/shake-torch-app.qml sailfish/ShakeTorchSwitch.qml sailfish/shake-torch.desktop shake-torch.svg
 	rm -rf $(RPMDIR) && mkdir -p $(RPMDIR)/SOURCES
@@ -29,4 +29,3 @@ rpm: shake-torch sailfish/shake-torch.spec sailfish/shake-torch.service sailfish
 clean:
 	rm -f shake-torch *.rpm
 .PHONY: clean rpm
-.PHONY: clean

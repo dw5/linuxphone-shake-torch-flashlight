@@ -53,6 +53,24 @@ Remove: `devel-su rpm -e shake-torch`, then `systemctl --user stop shake-torch`.
 
 On FuriOS, the **Shake Torch** app (`shake-torch-settings`, GTK): on or off, how hard to shake, and the buzz lengths, with **Try torch on** / **Try torch off** buttons to feel them first. Changes save at once and the service rereads them.
 
+## Marking wrong switches
+
+To collect real cases for tuning, the app (and the Sailfish Settings page) has a **Wrong switches** section, added in 0.8:
+
+- The last 5 switches by shaking, since the service started, each with **Wrong** and **Right** buttons. Tapping a marked button again takes the mark back. "Right" marks are there to compare against.
+- **A shake did nothing: Save** keeps the last 15 s. Use it soon after the missed shake.
+- The "Flashlight is on" notification has a **Mistake: turn off** button. It marks the switch that turned the torch on as wrong, and turns it off.
+
+The service keeps the last 15 s of accelerometer and gyroscope readings in memory. For each switch it keeps the readings from 8 s before to 2 s after, so a switch can still be marked minutes later. Nothing is written until something is marked, and nothing survives a restart of the service.
+
+Each mark is a file in `~/.local/share/shake-torch/marks/`, named `<date>-<time>-bad.txt`, `-good.txt` or `-missed.txt`. It's in the `--record` format with a `#` header. The header gives the version, the phone, the switch (on or off, swing, swing back, degrees turned) and the settings then. `shake-torch --replay FILE` runs the detector over it, so other settings can be tried against all marks. For example, after copying the marks to the laptop:
+
+```
+for f in marks/*.txt; do echo "$f"; shake-torch --replay "$f" | grep -E 'SHAKE|ignored'; done
+```
+
+(Change the settings for a replay in `~/.config/shake-torch.conf` on the machine running it.)
+
 Underneath it's `~/.config/shake-torch.conf`, see `shake-torch.conf.example`. After editing by hand: `systemctl --user reload shake-torch`.
 
 ## Tuning and testing
@@ -70,7 +88,8 @@ Underneath it's `~/.config/shake-torch.conf`, see `shake-torch.conf.example`. Af
 Not done yet:
 
 - **Screen off on Sailfish:** measure with `--record` (it now records when each reading arrived), then decide between keeping the processor awake while the phone moves and accepting the delay.
-- **Twist limit:** 108° is Motorola's number. The FLX1s recording wasn't labelled shake by shake, so it isn't tuned to the user's twists yet.
+- **Twist limit:** 108° is Motorola's number. The FLX1s recording wasn't labelled shake by shake, so it isn't tuned to the user's twists yet. Marks (0.8) are meant to gather those labels.
+- **0.8 (marks) is built but not installed or tried on either phone yet** (2026-11-13). Tested in the container: marks of a recording replay correctly, and the D-Bus methods and the GTK app's section work against a stand-in service. Not tested: the Sailfish page (no Silica in the container), and whether lipstick shows the notification's second button.
 - **More of Motorola's checks,** if false triggers show up: direction (`max_xy_percentage`), and ignoring the phone in a pocket (proximity).
 - **Battery over hours** with the screen off is not measured; processor time is (see above).
 - A Codex review.

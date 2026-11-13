@@ -10,6 +10,8 @@ Page {
     property bool ready: false     // settings came from the service
     property bool loading: false   // filling the controls in; don't save
     property bool sensing: false
+    property var recent: []        // the last switches by shaking, newest first
+    property string marksInfo: ""
 
     DBusInterface {
         id: service
@@ -40,8 +42,10 @@ Page {
             gapMs.value = s["buzz-gap-ms"]
             offMs.value = s["buzz-off-ms"]
             sensing = s["running"]
+            marksInfo = s["marks"] + " saved in " + s["marks-dir"]
             loading = false
             ready = true
+            loadRecent()
         }, function () {
             ready = false
         })
@@ -62,7 +66,40 @@ Page {
                                       { "type": "i", "value": Math.round(offMs.value) }])
     }
 
+    function loadRecent() {
+        service.typedCall("GetRecent", [], function (r) { recent = r })
+    }
+
+    // The switches, marks and whether it's sensing; not the sliders, which may be moving.
+    function refresh() {
+        service.typedCall("GetSettings", [], function (s) {
+            sensing = s["running"]
+            marksInfo = s["marks"] + " saved in " + s["marks-dir"]
+        }, function () { ready = false })
+        loadRecent()
+    }
+
+    // Pressing a switch's marked button again takes the mark back.
+    function mark(when, kind) {
+        service.typedCall("Mark", [{ "type": "x", "value": when }, { "type": "s", "value": kind }],
+                          function () { refresh() }, function () { marksInfo = "Couldn't save the mark" })
+    }
+
+    function ago(when) {
+        var s = Math.max(0, Math.round(Date.now() / 1000 - when))
+        return s < 60 ? s + " s ago" : s < 3600 ? Math.floor(s / 60) + " min ago"
+                                                : Math.floor(s / 3600) + " h ago"
+    }
+
     Component.onCompleted: load()
+
+    // Keep the switches and their times current while the page is shown.
+    Timer {
+        interval: 3000
+        repeat: true
+        running: page.ready && page.status === PageStatus.Active
+        onTriggered: page.refresh()
+    }
 
     // Look again while the service isn't there, e.g. after pressing Start.
     Timer {
@@ -148,6 +185,102 @@ Page {
                     text: "Notification while it's on"
                     description: "\u201cFlashlight is on\u201d, tap to turn it off"
                     onCheckedChanged: page.set("notify", checked)
+                }
+
+                SectionHeader { text: "Wrong switches" }
+
+                Label {
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * x
+                    wrapMode: Text.Wrap
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    color: Theme.secondaryHighlightColor
+                    text: "Did a shake switch the torch when you didn't mean it, or did a shake do "
+                          + "nothing? Mark it here. The readings around it are saved, to tune the "
+                          + "settings later. The last 5 switches since the service started."
+                }
+
+                Label {
+                    x: Theme.horizontalPageMargin
+                    visible: page.recent.length === 0
+                    text: "No switches by shaking yet"
+                    color: Theme.highlightColor
+                }
+
+                Repeater {
+                    model: page.recent
+                    delegate: Item {
+                        width: parent.width
+                        height: Math.max(info.height, buttons.height) + Theme.paddingSmall
+
+                        Column {
+                            id: info
+                            x: Theme.horizontalPageMargin
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 2 * x - buttons.width - Theme.paddingMedium
+                            Label {
+                                text: modelData["on"] ? "Torch on" : "Torch off"
+                                color: Theme.highlightColor
+                            }
+                            Label {
+                                width: parent.width
+                                truncationMode: TruncationMode.Fade
+                                font.pixelSize: Theme.fontSizeExtraSmall
+                                color: Theme.secondaryHighlightColor
+                                text: Qt.formatTime(new Date(modelData["when"] * 1000), "hh:mm:ss")
+                                      + ", " + page.ago(modelData["when"])
+                            }
+                        }
+                        Row {
+                            id: buttons
+                            anchors { right: parent.right; rightMargin: Theme.horizontalPageMargin
+                                      verticalCenter: parent.verticalCenter }
+                            spacing: Theme.paddingSmall
+                            Button {
+                                preferredWidth: Theme.buttonWidthExtraSmall
+                                text: modelData["mark"] === "bad" ? "Wrong \u2713" : "Wrong"
+                                highlighted: down || modelData["mark"] === "bad"
+                                onClicked: page.mark(modelData["when"], modelData["mark"] === "bad" ? "" : "bad")
+                            }
+                            Button {
+                                preferredWidth: Theme.buttonWidthExtraSmall
+                                text: modelData["mark"] === "good" ? "Right \u2713" : "Right"
+                                highlighted: down || modelData["mark"] === "good"
+                                onClicked: page.mark(modelData["when"], modelData["mark"] === "good" ? "" : "good")
+                            }
+                        }
+                    }
+                }
+
+                Item {
+                    width: parent.width
+                    height: missedButton.height + Theme.paddingSmall
+                    Label {
+                        x: Theme.horizontalPageMargin
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 2 * x - missedButton.width - Theme.paddingMedium
+                        wrapMode: Text.Wrap
+                        text: "A shake did nothing"
+                        color: Theme.highlightColor
+                    }
+                    Button {
+                        id: missedButton
+                        anchors { right: parent.right; rightMargin: Theme.horizontalPageMargin
+                                  verticalCenter: parent.verticalCenter }
+                        preferredWidth: Theme.buttonWidthExtraSmall
+                        text: "Save"
+                        onClicked: service.typedCall("MarkMissed", [], function () { page.refresh() },
+                                                     function () { page.marksInfo = "Couldn't save" })
+                    }
+                }
+
+                Label {
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * x
+                    wrapMode: Text.Wrap
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    color: Theme.secondaryHighlightColor
+                    text: "Saves the last 15 s; do it soon after. " + page.marksInfo
                 }
 
                 SectionHeader { text: "How hard to shake" }

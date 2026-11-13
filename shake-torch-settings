@@ -1,10 +1,13 @@
 #!/usr/bin/python3
 """Settings for shake-torch on FuriOS: on or off, how hard to shake, and the buzzes,
 with buttons to feel them before keeping them. Changes are saved at once to
-~/.config/shake-torch.conf and the service is told to reread it."""
+~/.config/shake-torch.conf and the service is told to reread it.
+Also marks: the user says a switch was wrong or right, or a shake did nothing, and the
+service saves the readings around it for tuning later (over D-Bus, local.ShakeTorch)."""
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import gi
@@ -21,6 +24,26 @@ VIBRATOR = Path("/sys/class/leds/vibrator")
 DEFAULTS = {"enabled": True, "threshold": 1.4, "max-rotation": 108.0, "notify": True,
             "vibrate": True, "buzz-on-ms": 200, "buzz-second-ms": 400, "buzz-gap-ms": 100,
             "buzz-off-ms": 300}
+
+
+def service_call(method, args=None, reply=None):
+    """Call the running service; None if it isn't there."""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        r = bus.call_sync("local.ShakeTorch", "/local/ShakeTorch", "local.ShakeTorch", method,
+                          args, GLib.VariantType(reply) if reply else None,
+                          Gio.DBusCallFlags.NONE, 3000)
+        return r.unpack() if r else ()
+    except GLib.Error as e:
+        return e
+
+
+def ago(seconds):
+    if seconds < 60:
+        return f"{seconds} s ago"
+    if seconds < 3600:
+        return f"{seconds // 60} min ago"
+    return f"{seconds // 3600} h ago"
 
 
 def buzz(ms):
@@ -105,8 +128,24 @@ class Window(Adw.ApplicationWindow):
                 b.set_sensitive(False)
             vib.set_description(vib.get_description() + " (No vibrator found to try them on.)")
 
+        self.marks = Adw.PreferencesGroup(
+            title="Wrong switches",
+            description="Did a shake switch the torch when you didn't mean it, or did a shake "
+                        "do nothing? Mark it here. The readings around it are saved, to tune "
+                        "the settings later. The last 5 switches since the service started.")
+        self.mark_rows = []
+        self.recent_key = None
+        missed = Adw.ActionRow(title="A shake did nothing",
+                               subtitle="Saves the last 15 s; mark it soon after")
+        self.missed_button = Gtk.Button(label="Save", valign=Gtk.Align.CENTER)
+        self.missed_button.connect("clicked", self.mark_missed)
+        missed.add_suffix(self.missed_button)
+        self.marks.add(missed)
+        self.marks_info = Adw.ActionRow(title="Saved marks", subtitle="")
+        self.marks.add(self.marks_info)
+
         page = Adw.PreferencesPage()
-        for g in (main, hard, twist, vib):
+        for g in (main, self.marks, hard, twist, vib):
             page.add(g)
         view = Adw.ToolbarView(content=page)
         view.add_top_bar(Adw.HeaderBar())
@@ -209,7 +248,72 @@ class Window(Adw.ApplicationWindow):
             state = "unknown"
         self.status.set_subtitle({"active": "Running", "inactive": "Not running",
                                   "failed": "Failed; see its log"}.get(state, state or "unknown"))
+        self.refresh_marks()
         return GLib.SOURCE_CONTINUE
+
+    def refresh_marks(self):
+        recent = service_call("GetRecent", None, "(aa{sv})")
+        settings = service_call("GetSettings", None, "(a{sv})")
+        up = isinstance(recent, tuple) and isinstance(settings, tuple)
+        recent = recent[0] if up else []
+        self.missed_button.set_sensitive(up)
+        if up:
+            s = settings[0]
+            self.marks_info.set_subtitle(f"{s.get('marks', 0)} in {s.get('marks-dir', '')}")
+        else:
+            self.marks_info.set_subtitle("The service isn't running")
+        # Rebuild the rows only when the switches or marks changed; else just the times.
+        key = [(r["when"], r["mark"]) for r in recent]
+        if key != self.recent_key:
+            self.recent_key = key
+            for row, _ in self.mark_rows:
+                self.marks.remove(row)
+            self.mark_rows = []
+            for r in recent:
+                row = self.switch_row(r)
+                self.marks.add(row)
+                self.mark_rows.append((row, r))
+            if not recent:
+                row = Adw.ActionRow(title="No switches by shaking yet",
+                                    subtitle="Since the service started")
+                self.marks.add(row)
+                self.mark_rows.append((row, None))
+        now = int(time.time())
+        for row, r in self.mark_rows:
+            if r:
+                row.set_subtitle(self.switch_subtitle(r, now))
+
+    def switch_subtitle(self, r, now):
+        when = time.strftime("%H:%M:%S", time.localtime(r["when"]))
+        mark = {"bad": " · marked wrong", "good": " · marked right"}.get(r["mark"], "")
+        return f"{when}, {ago(max(0, now - r['when']))}{mark}"
+
+    def switch_row(self, r):
+        row = Adw.ActionRow(title="Torch on" if r["on"] else "Torch off")
+        for kind, label in (("bad", "Wrong"), ("good", "Right")):
+            b = Gtk.ToggleButton(label=label, valign=Gtk.Align.CENTER, active=r["mark"] == kind)
+            if kind == "bad":
+                b.add_css_class("destructive-action")
+            b.connect("clicked", self.mark, r["when"], kind)
+            row.add_suffix(b)
+        return row
+
+    def mark(self, button, when, kind):
+        # Pressing a marked button again takes the mark back.
+        result = service_call("Mark", GLib.Variant("(xs)", (when, kind if button.get_active() else "")),
+                              "(s)")
+        if isinstance(result, GLib.Error):
+            self.marks_info.set_subtitle(f"Couldn't mark: {result.message}")
+        self.recent_key = None
+        self.refresh_marks()
+
+    def mark_missed(self, *_):
+        result = service_call("MarkMissed", None, "(s)")
+        self.refresh_marks()
+        if isinstance(result, GLib.Error):
+            self.marks_info.set_subtitle(f"Couldn't save: {result.message}")
+        else:
+            self.marks_info.set_subtitle(f"Saved {os.path.basename(result[0])}")
 
     def on_close(self, *_):
         if self.save_id:

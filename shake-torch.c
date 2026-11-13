@@ -17,7 +17,10 @@
  *        shake-torch --replay FILE   run the detector over a recording; no torch
  *        shake-torch --toggle        switch the torch once and exit
  * Settings: ~/.config/shake-torch.conf, reread on SIGHUP (see README.md), and over
- * D-Bus while running (local.ShakeTorch, for the Sailfish settings page).
+ * D-Bus while running (local.ShakeTorch, for the settings apps).
+ * Marks: a switch the user says was wrong (or right), or a shake that did nothing, is
+ * saved with the readings around it to ~/.local/share/shake-torch/marks/, in the
+ * --record format, for --replay and tuning later.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -30,6 +33,7 @@
 
 #include <gio/gio.h>
 #include <glib-unix.h>
+#include <glib/gstdio.h>
 
 #define SENSOR_SERVICE "com.nokia.SensorService"
 #define SENSOR_MANAGER "/SensorManager"
@@ -37,6 +41,34 @@
 #define READING_SIZE 24
 #define INTERVAL_MS 20
 #define WINDOW_MAX 256  /* readings kept for the detector: 5 s at 50 a second */
+#ifndef VERSION
+#define VERSION "dev"
+#endif
+
+/* For marks: every reading of the last 15 s, as it came from sensorfwd. */
+#define HISTORY_MAX 4096
+#define HISTORY_US 15000000
+#define BEFORE_US 8000000   /* a switch's mark: from 8 s before it */
+#define AFTER_US 2000000    /* to 2 s after */
+#define RECENT_MAX 5        /* switches that can still be marked */
+
+typedef struct {
+    guint64 t;        /* sensor time, us */
+    gint64 arrival;   /* monotonic, us */
+    float x, y, z;    /* milli-g, or milli-degrees/s */
+    gboolean gyro;
+} Raw;
+
+/* A switch made by a shake, and the readings around it once AFTER_US has passed. */
+typedef struct {
+    gint64 when;      /* wall clock, us; also its id over D-Bus (in seconds) */
+    guint64 t;        /* sensor time */
+    gboolean on;      /* switched the torch on */
+    double peak, back, deg;
+    GArray *raw;      /* of Raw; NULL until captured */
+    char *mark;       /* "bad", "good" or NULL */
+    char *file;       /* the mark's file */
+} Switch;
 
 #define FURIOS_TORCH "io.furios.Flashlightd"
 #define FURIOS_TORCH_PATH "/io/furios/Flashlightd"
@@ -85,6 +117,10 @@ typedef struct {
     struct { guint64 t; double rate; } rot[WINDOW_MAX];      /* last second: turning, degrees/s */
     int rn, rfirst;
     double bump;          /* strongest movement in the current bump (log-movement) */
+    Raw hist[HISTORY_MAX];  /* marks: the last 15 s, oldest first */
+    int hn, hfirst;
+    Switch recent[RECENT_MAX];  /* oldest first */
+    int recent_n;
     guint64 last_print;
     double print_max, print_rot;
 } App;
@@ -351,7 +387,8 @@ static void show_notification(void)
 {
     if (!app.notify)
         return;
-    const char *actions[] = { "default", "Turn off", NULL };
+    /* "mistake": the shake wasn't meant; turn off and mark the switch bad. */
+    const char *actions[] = { "default", "Turn off", "mistake", "Mistake: turn off", NULL };
     GVariantBuilder hints;
     g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
     g_variant_builder_add(&hints, "{sv}", "urgency", g_variant_new_byte(1));
@@ -360,6 +397,8 @@ static void show_notification(void)
     g_variant_builder_add(&hints, "{sv}", "x-nemo-icon", g_variant_new_string("icon-m-flashlight"));
     g_variant_builder_add(&hints, "{sv}", "x-nemo-remote-action-default",
                           g_variant_new_string("local.ShakeTorch /local/ShakeTorch local.ShakeTorch TorchOff"));
+    g_variant_builder_add(&hints, "{sv}", "x-nemo-remote-action-mistake",
+                          g_variant_new_string("local.ShakeTorch /local/ShakeTorch local.ShakeTorch MistakeOff"));
     g_variant_builder_add(&hints, "{sv}", "x-nemo-feedback", g_variant_new_string(""));
     g_dbus_connection_call(app.session, NOTIFY_NAME, NOTIFY_PATH, NOTIFY_NAME, "Notify",
                            g_variant_new("(susss^asa{sv}i)", "Shake Torch", app.notification,
@@ -376,6 +415,8 @@ static void torch_off(void)
         set_torch(FALSE, NULL);
 }
 
+static void mistake_off(void);
+
 static void on_notification_signal(GDBusConnection *c, const char *sender, const char *path,
                                    const char *iface, const char *signal, GVariant *args, gpointer _)
 {
@@ -385,6 +426,8 @@ static void on_notification_signal(GDBusConnection *c, const char *sender, const
         g_variant_get(args, "(u&s)", &id, &action);
         if (id && id == app.notification && g_str_equal(action, "default"))
             torch_off();
+        else if (id && id == app.notification && g_str_equal(action, "mistake"))
+            mistake_off();
     } else if (g_str_equal(signal, "NotificationClosed")) {
         g_variant_get(args, "(uu)", &id, NULL);
         if (id && id == app.notification)
@@ -426,7 +469,9 @@ static void watch_notifications(void)
                                        G_DBUS_SIGNAL_FLAGS_NONE, on_torch_signal, NULL, NULL);
 }
 
-static void shaken(guint64 t)
+static void remember_switch(guint64 t, gboolean on, double peak, double back, double deg);
+
+static void shaken(guint64 t, double peak, double back, double deg)
 {
     app.armed = FALSE;
     app.calm_since = 0;
@@ -443,6 +488,7 @@ static void shaken(guint64 t)
     if (was < 0)
         return;
     g_message("Shake: torch %s", was ? "off" : "on");
+    remember_switch(t, !was, peak, back, deg);
     vibrate(!was);
     set_torch(!was, NULL);
     if (was)
@@ -452,8 +498,12 @@ static void shaken(guint64 t)
 }
 
 /* Gyroscope: sensorfwd gives the turning rate in milli-degrees per second. */
+static void history_add(guint64 t, double x, double y, double z, gboolean gyro);
+
 static void on_gyro(guint64 t, double x, double y, double z)
 {
+    if (!app.replay)
+        history_add(t, x, y, z, TRUE);
     if (app.record)
         fprintf(app.record, "g %" G_GUINT64_FORMAT " %.1f %.1f %.1f %" G_GINT64_FORMAT "\n",
                 t, x, y, z, app.replay ? 0 : g_get_monotonic_time());
@@ -491,6 +541,8 @@ static void on_reading(guint64 t, double x, double y, double z)
         /* the reading's time, x, y, z, and when it arrived here (monotonic, us) */
         fprintf(app.record, "%" G_GUINT64_FORMAT " %.1f %.1f %.1f %" G_GINT64_FORMAT "\n",
                 t, x, y, z, app.replay ? 0 : g_get_monotonic_time());
+    if (!app.replay)
+        history_add(t, x, y, z, FALSE);
     x /= 1000.0, y /= 1000.0, z /= 1000.0;  /* milli-g to g */
 
     /* Gravity: the average of the last second. */
@@ -590,7 +642,196 @@ static void on_reading(guint64 t, double x, double y, double z)
         g_print("%8.2f s  (turned %.0f deg)\n", t / 1e6, deg);
     else if (!app.replay && deg >= 0)
         g_message("Shake: the phone turned %.0f degrees", deg);
-    shaken(t);
+    shaken(t, peak, back, deg);
+}
+
+/* Marks. The user can say a switch was wrong ("bad": the torch switched when they
+ * didn't shake it, or switched back too early) or right ("good", to compare against),
+ * or that a shake did nothing ("missed"). Each mark is a file with the readings around
+ * it, in the --record format with a "#" header, so --replay runs the detector over it
+ * with other settings. The readings of a switch are kept from 8 s before to 2 s after,
+ * so it can still be marked minutes later; the last 5 switches are kept, in memory only. */
+
+/* The readings around a switch that the history still has. */
+static GArray *collect(Switch *sw)
+{
+    GArray *raw = g_array_new(FALSE, FALSE, sizeof(Raw));
+    guint64 from = sw->t > BEFORE_US ? sw->t - BEFORE_US : 0;
+    for (int i = 0; i < app.hn; i++) {
+        Raw *r = &app.hist[(app.hfirst + i) % HISTORY_MAX];
+        if (r->t >= from && r->t <= sw->t + AFTER_US)
+            g_array_append_val(raw, *r);
+    }
+    return raw;
+}
+
+static char *mark_switch(Switch *sw, const char *kind, GError **error);
+
+static void history_add(guint64 t, double x, double y, double z, gboolean gyro)
+{
+    if (app.hn == HISTORY_MAX)
+        app.hfirst = (app.hfirst + 1) % HISTORY_MAX, app.hn--;
+    app.hist[(app.hfirst + app.hn++) % HISTORY_MAX] =
+        (Raw){ t, g_get_monotonic_time(), x, y, z, gyro };
+    while (app.hn > 1 && t > app.hist[app.hfirst].t + HISTORY_US)
+        app.hfirst = (app.hfirst + 1) % HISTORY_MAX, app.hn--;
+    if (gyro)
+        return;
+    for (int i = 0; i < app.recent_n; i++) {
+        Switch *sw = &app.recent[i];
+        if (sw->raw || t < sw->t + AFTER_US)
+            continue;
+        sw->raw = collect(sw);
+        if (sw->mark) {
+            /* Marked early: write it again, now with the 2 s after. */
+            g_autofree char *kind = g_strdup(sw->mark);
+            g_autofree char *file = mark_switch(sw, kind, NULL);
+        }
+    }
+}
+
+static void free_switch(Switch *sw)
+{
+    if (sw->raw)
+        g_array_unref(sw->raw);
+    g_free(sw->mark);
+    g_free(sw->file);
+}
+
+static void remember_switch(guint64 t, gboolean on, double peak, double back, double deg)
+{
+    if (app.recent_n == RECENT_MAX) {
+        free_switch(&app.recent[0]);
+        memmove(app.recent, app.recent + 1, (RECENT_MAX - 1) * sizeof(Switch));
+        app.recent_n--;
+    }
+    app.recent[app.recent_n++] = (Switch){ g_get_real_time(), t, on, peak, back, deg, NULL, NULL, NULL };
+}
+
+static Switch *find_switch(gint64 when_s)
+{
+    for (int i = 0; i < app.recent_n; i++)
+        if (app.recent[i].when / G_USEC_PER_SEC == when_s)
+            return &app.recent[i];
+    return NULL;
+}
+
+static char *marks_dir(void)
+{
+    return g_build_filename(g_get_user_data_dir(), "shake-torch", "marks", NULL);
+}
+
+static int count_marks(void)
+{
+    g_autofree char *dir = marks_dir();
+    g_autoptr(GDir) d = g_dir_open(dir, 0, NULL);
+    int n = 0;
+    const char *name;
+    while (d && (name = g_dir_read_name(d)))
+        n += g_str_has_suffix(name, ".txt");
+    return n;
+}
+
+static char *local_time(gint64 us, const char *format)
+{
+    g_autoptr(GDateTime) dt = g_date_time_new_from_unix_local(us / G_USEC_PER_SEC);
+    return g_date_time_format(dt, format);
+}
+
+/* Write a mark: of a switch (sw), or of a missed shake (sw NULL: the last 15 s). */
+static char *write_mark(const char *kind, Switch *sw, GError **error)
+{
+    gint64 now = g_get_real_time();
+    g_autofree char *dir = marks_dir();
+    g_autofree char *stamp = local_time(sw ? sw->when : now, "%Y%m%d-%H%M%S");
+    g_autofree char *name = g_strdup_printf("%s-%s.txt", stamp, kind);
+    char *path = g_build_filename(dir, name, NULL);
+    g_autofree char *os = g_get_os_info(G_OS_INFO_KEY_PRETTY_NAME);
+    g_autofree char *marked = local_time(now, "%Y-%m-%d %H:%M:%S");
+
+    GString *out = g_string_new(NULL);
+    g_string_append_printf(out, "# shake-torch %s mark: %s\n", VERSION, kind);
+    g_string_append_printf(out, "# marked %s on %s (%s)\n", marked, g_get_host_name(), os ? os : "?");
+    if (sw) {
+        g_autofree char *at = local_time(sw->when, "%Y-%m-%d %H:%M:%S");
+        g_string_append_printf(out, "# switch at %s: torch %s; sensor time %" G_GUINT64_FORMAT
+                               " us; swing %.2f g, back %.2f g, turned %.0f degrees%s\n",
+                               at, sw->on ? "on" : "off", sw->t, sw->peak, sw->back, sw->deg,
+                               sw->deg < 0 ? " (no gyroscope)" : "");
+        g_string_append_printf(out, "# readings from %d s before to %d s after the switch\n",
+                               BEFORE_US / 1000000, AFTER_US / 1000000);
+    } else {
+        g_string_append_printf(out, "# a shake did nothing: the last %d s before the mark\n",
+                               HISTORY_US / 1000000);
+    }
+    g_string_append_printf(out, "# settings: threshold %.2f, max-rotation %.0f, cooldown-ms %d, "
+                           "screen-off %s, enabled %s\n", app.threshold_g, app.max_rotation,
+                           app.cooldown_ms, app.screen_off ? "true" : "false",
+                           app.enabled ? "true" : "false");
+    g_string_append(out, "# lines: [g] time x y z arrival (accelerometer milli-g; g: gyroscope "
+                         "milli-degrees/s). shake-torch --replay FILE\n");
+    Raw *rows = NULL;
+    guint n = 0;
+    if (sw) {
+        /* Marked within 2 s of the switch (the notification's button): what there is so far. */
+        g_autoptr(GArray) raw = sw->raw ? g_array_ref(sw->raw) : collect(sw);
+        rows = (Raw *)raw->data, n = raw->len;
+        for (guint i = 0; i < n; i++)
+            g_string_append_printf(out, "%s%" G_GUINT64_FORMAT " %.1f %.1f %.1f %" G_GINT64_FORMAT "\n",
+                                   rows[i].gyro ? "g " : "", rows[i].t, rows[i].x, rows[i].y,
+                                   rows[i].z, rows[i].arrival);
+    } else {
+        for (int i = 0; i < app.hn; i++) {
+            Raw *r = &app.hist[(app.hfirst + i) % HISTORY_MAX];
+            g_string_append_printf(out, "%s%" G_GUINT64_FORMAT " %.1f %.1f %.1f %" G_GINT64_FORMAT "\n",
+                                   r->gyro ? "g " : "", r->t, r->x, r->y, r->z, r->arrival);
+            n++;
+        }
+    }
+    if (n == 0)
+        g_string_append(out, "# no readings: the sensors weren't running\n");
+
+    gboolean ok = g_mkdir_with_parents(dir, 0700) == 0
+                  && g_file_set_contents(path, out->str, out->len, error);
+    if (!ok && error && !*error)
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno), "%s: %s", dir, g_strerror(errno));
+    g_string_free(out, TRUE);
+    if (!ok)
+        g_clear_pointer(&path, g_free);
+    else
+        g_message("Marked %s: %s (%u readings)", kind, path, n);
+    return path;
+}
+
+/* Mark a switch "bad" or "good", or "" to take the mark back. Returns the file, "" when
+ * taken back, or NULL with error set. */
+static char *mark_switch(Switch *sw, const char *kind, GError **error)
+{
+    if (sw->file) {
+        g_unlink(sw->file);
+        g_clear_pointer(&sw->file, g_free);
+        g_clear_pointer(&sw->mark, g_free);
+    }
+    if (!*kind)
+        return g_strdup("");
+    sw->file = write_mark(kind, sw, error);
+    if (!sw->file)
+        return NULL;
+    sw->mark = g_strdup(kind);
+    return g_strdup(sw->file);
+}
+
+/* From the notification: the last shake turned the torch on by mistake. */
+static void mistake_off(void)
+{
+    Switch *sw = app.recent_n ? &app.recent[app.recent_n - 1] : NULL;
+    if (sw && sw->on) {
+        g_autoptr(GError) e = NULL;
+        g_autofree char *file = mark_switch(sw, "bad", &e);
+        if (!file)
+            g_warning("Can't save the mark: %s", e->message);
+    }
+    torch_off();
 }
 
 /* Sensor sessions. The accelerometer is required; the gyroscope is used when the phone
@@ -823,7 +1064,14 @@ static gboolean on_reload(gpointer _)
  *   Set(s key, s value)               change one setting; saved to the config file
  *   TorchOff()                        turn the torch off (the notification's tap)
  *   TryBuzz(b on, i first, i second, i gap, i off)
- *                                     buzz as for torch on or off, with these lengths */
+ *                                     buzz as for torch on or off, with these lengths
+ *   GetRecent() -> aa{sv}             the last switches by shaking, newest first: when
+ *                                     (x, unix seconds; the id), on (b), peak, back (d, g),
+ *                                     turned (d, degrees, -1: no gyroscope), mark (s)
+ *   Mark(x when, s kind) -> s file    mark a switch "bad" or "good"; "" takes it back
+ *   MarkMissed() -> s file            a shake did nothing: save the last 15 s
+ *   MistakeOff()                      mark the last switch bad if it turned the torch
+ *                                     on, and turn it off (the notification's button) */
 #define BUS_NAME "local.ShakeTorch"
 #define BUS_PATH "/local/ShakeTorch"
 
@@ -837,6 +1085,11 @@ static const char introspection[] =
     "<arg type='i' name='on_ms' direction='in'/><arg type='i' name='second_ms' direction='in'/>"
     "<arg type='i' name='gap_ms' direction='in'/>"
     "<arg type='i' name='off_ms' direction='in'/></method>"
+    "<method name='GetRecent'><arg type='aa{sv}' direction='out'/></method>"
+    "<method name='Mark'><arg type='x' name='when' direction='in'/>"
+    "<arg type='s' name='kind' direction='in'/><arg type='s' name='file' direction='out'/></method>"
+    "<method name='MarkMissed'><arg type='s' name='file' direction='out'/></method>"
+    "<method name='MistakeOff'/>"
     "</interface></node>";
 
 static const struct { const char *key; char type; } setting_keys[] = {
@@ -902,6 +1155,9 @@ static void on_method(GDBusConnection *c, const char *sender, const char *path, 
         g_variant_builder_add(&b, "{sv}", "max-rotation", g_variant_new_double(app.max_rotation));
         g_variant_builder_add(&b, "{sv}", "notify", g_variant_new_boolean(app.notify));
         g_variant_builder_add(&b, "{sv}", "running", g_variant_new_boolean(app.acc.sid >= 0));
+        g_variant_builder_add(&b, "{sv}", "marks", g_variant_new_int32(count_marks()));
+        g_autofree char *dir = marks_dir();
+        g_variant_builder_add(&b, "{sv}", "marks-dir", g_variant_new_string(dir));
         g_dbus_method_invocation_return_value(inv, g_variant_new("(a{sv})", &b));
     } else if (g_str_equal(method, "Set")) {
         const char *key, *value;
@@ -922,6 +1178,48 @@ static void on_method(GDBusConnection *c, const char *sender, const char *path, 
         g_variant_get(args, "(biiii)", &on, &on_ms, &second_ms, &gap_ms, &off_ms);
         buzz_pattern(on, CLAMP(on_ms, 10, 2000), CLAMP(second_ms, 10, 2000),
                      CLAMP(gap_ms, 50, 2000), CLAMP(off_ms, 10, 2000));
+        g_dbus_method_invocation_return_value(inv, NULL);
+    } else if (g_str_equal(method, "GetRecent")) {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("aa{sv}"));
+        for (int i = app.recent_n - 1; i >= 0; i--) {
+            Switch *sw = &app.recent[i];
+            GVariantBuilder d;
+            g_variant_builder_init(&d, G_VARIANT_TYPE("a{sv}"));
+            g_variant_builder_add(&d, "{sv}", "when", g_variant_new_int64(sw->when / G_USEC_PER_SEC));
+            g_variant_builder_add(&d, "{sv}", "on", g_variant_new_boolean(sw->on));
+            g_variant_builder_add(&d, "{sv}", "peak", g_variant_new_double(sw->peak));
+            g_variant_builder_add(&d, "{sv}", "back", g_variant_new_double(sw->back));
+            g_variant_builder_add(&d, "{sv}", "turned", g_variant_new_double(sw->deg));
+            g_variant_builder_add(&d, "{sv}", "mark", g_variant_new_string(sw->mark ? sw->mark : ""));
+            g_variant_builder_add(&b, "a{sv}", &d);
+        }
+        g_dbus_method_invocation_return_value(inv, g_variant_new("(aa{sv})", &b));
+    } else if (g_str_equal(method, "Mark")) {
+        gint64 when;
+        const char *kind;
+        g_variant_get(args, "(x&s)", &when, &kind);
+        Switch *sw = find_switch(when);
+        if (!sw || !(g_str_equal(kind, "bad") || g_str_equal(kind, "good") || !*kind)) {
+            g_dbus_method_invocation_return_error(inv, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS,
+                                                  sw ? "Kind is bad, good or empty" : "No such switch");
+            return;
+        }
+        GError *e = NULL;
+        g_autofree char *file = mark_switch(sw, kind, &e);
+        if (!file)
+            g_dbus_method_invocation_take_error(inv, e);
+        else
+            g_dbus_method_invocation_return_value(inv, g_variant_new("(s)", file));
+    } else if (g_str_equal(method, "MarkMissed")) {
+        GError *e = NULL;
+        g_autofree char *file = write_mark("missed", NULL, &e);
+        if (!file)
+            g_dbus_method_invocation_take_error(inv, e);
+        else
+            g_dbus_method_invocation_return_value(inv, g_variant_new("(s)", file));
+    } else if (g_str_equal(method, "MistakeOff")) {
+        mistake_off();
         g_dbus_method_invocation_return_value(inv, NULL);
     }
 }
